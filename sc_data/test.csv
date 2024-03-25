@@ -1,0 +1,3501 @@
+,function,location
+832,"    function lotPrice() external view virtual returns (uint192 lotLow, uint192 lotHigh) {
+        try this.tryPrice() returns (uint192 low, uint192 high, uint192) {
+            // if the price feed is still functioning, use that
+            lotLow = low;
+            lotHigh = high;
+        } catch (bytes memory errData) {
+            // see: docs/solidity-style.md#Catching-Empty-Data
+            if (errData.length == 0) revert(); // solhint-disable-line reason-string
+
+            // if the price feed is broken, use a decayed historical value
+
+            uint48 delta = uint48(block.timestamp) - lastSave; // {s}
+            if (delta >= priceTimeout) return (0, 0); // no price after timeout elapses
+
+            // {1} = {s} / {s}
+            uint192 lotMultiplier = divuu(priceTimeout - delta, priceTimeout);
+
+            // {UoA/tok} = {UoA/tok} * {1}
+            lotLow = savedLowPrice.mul(lotMultiplier);
+            lotHigh = savedHighPrice.mul(lotMultiplier);
+        }
+        assert(lotLow <= lotHigh);
+    }","[19, 20]"
+3139,"  function transferNotionalFrom(address f, address t, uint256 a) external authorized(admin) returns (bool) {
+    if (f == t) { revert Exception(32, 0, 0, f, t); }
+
+    Vault memory from = vaults[f];
+    Vault memory to = vaults[t];
+
+    if (a > from.notional) { revert Exception(31, a, from.notional, address(0), address(0)); }
+
+    uint256 exchangeRate = Compounding.exchangeRate(protocol, cTokenAddr);
+
+    // if market has matured, calculate marginal interest between the maturity rate and previous position exchange rate
+    // otherwise, calculate marginal exchange rate between current and previous exchange rate.
+    uint256 yield;
+    if (maturityRate > 0) { 
+      // calculate marginal interest
+      yield = ((maturityRate * 1e26) / from.exchangeRate) - 1e26;
+    } else {
+      yield = ((exchangeRate * 1e26) / from.exchangeRate) - 1e26;
+    }
+
+    uint256 interest = (yield * from.notional) / 1e26;
+    // remove amount from position, Add interest to position, reset cToken exchange rate
+    from.redeemable += interest;
+    from.notional -= a;
+    from.exchangeRate = exchangeRate;
+
+    vaults[f] = from;
+
+    // transfer notional to address ""t"", calculate interest if necessary
+    if (to.notional > 0) {
+      // if market has matured, calculate marginal interest between the maturity rate and previous position exchange rate
+      // otherwise, calculate marginal exchange rate between current and previous exchange rate.
+      if (maturityRate > 0) { 
+        // calculate marginal interest
+        yield = ((maturityRate * 1e26) / to.exchangeRate) - 1e26;
+      } else {
+        yield = ((exchangeRate * 1e26) / to.exchangeRate) - 1e26;
+      }
+
+      uint256 newVaultInterest = (yield * to.notional) / 1e26;
+      // add interest and amount to position, reset cToken exchange rate
+      to.redeemable += newVaultInterest;
+      to.notional += a;
+    } else {
+      to.notional = a;
+    }
+
+    to.exchangeRate = exchangeRate;
+    vaults[t] = to;
+
+    return true;
+  }","[21, 40]"
+227,"    function calculateBorrowerReward(
+        address vToken,
+        RewardsDistributor rewardsDistributor,
+        address borrower,
+        RewardTokenState memory borrowState,
+        Exp memory marketBorrowIndex
+    ) internal view returns (uint256) {
+        Double memory borrowIndex = Double({ mantissa: borrowState.index });
+        Double memory borrowerIndex = Double({
+            mantissa: rewardsDistributor.rewardTokenBorrowerIndex(vToken, borrower)
+        });
+        if (borrowerIndex.mantissa == 0 && borrowIndex.mantissa > 0) {
+            // Covers the case where users borrowed tokens before the market's borrow state index was set
+            borrowerIndex.mantissa = rewardsDistributor.rewardTokenInitialIndex();
+        }
+        Double memory deltaIndex = sub_(borrowIndex, borrowerIndex);
+        uint256 borrowerAmount = div_(VToken(vToken).borrowBalanceStored(borrower), marketBorrowIndex);
+        uint256 borrowerDelta = mul_(borrowerAmount, deltaIndex);
+        return borrowerDelta;
+    }",[12]
+3027,"    function _executeWithToken(
+        string calldata,
+        string calldata,
+        bytes calldata payload,
+        string calldata tokenSymbol,
+        uint256 amount
+    ) internal override {
+        address receiver = abi.decode(payload, (address));
+        address tokenAddress = gateway().tokenAddresses(tokenSymbol);
+        address xc20 = wrapped[tokenAddress];
+        if (xc20 == address(0) || !LocalAsset(xc20).mint(receiver, amount)) {
+            _safeTransfer(tokenAddress, receiver, amount);
+        }
+    }","[11, 12, 13]"
+4184,"    function mintAllowed(address cAsset, address minter, uint mintAmount) external returns (uint) {
+        // Pausing is a very serious situation - we revert to sound the alarms
+        require(!mintGuardianPaused[cAsset], ""mint is paused"");
+
+        // Shh - currently unused
+        minter;
+        mintAmount;
+
+        if (!markets[cAsset].isListed) {
+            return uint(Error.MARKET_NOT_LISTED);
+        }
+
+        // Keep the flywheel moving
+        // updateCompSupplyIndex(cAsset);
+        // distributeSupplierComp(cAsset, minter);
+
+        return uint(Error.NO_ERROR);
+    }","[13, 14, 15]"
+1399,"    function addAsset(uint256 _asset, string memory _name, address _chainlinkFeed, uint256 _minLeverage, uint256 _maxLeverage, uint256 _feeMultiplier, uint256 _baseFundingRate) external onlyOwner {
+        bytes memory _assetName  = bytes(_idToAsset[_asset].name);
+        require(_assetName.length == 0, ""Already exists"");
+        require(bytes(_name).length > 0, ""No name"");
+        require(_maxLeverage >= _minLeverage && _minLeverage > 0, ""Wrong leverage values"");
+
+        allowedAsset[_asset] = true;
+        _idToAsset[_asset].name = _name;
+
+        _idToAsset[_asset].chainlinkFeed = _chainlinkFeed;
+
+        _idToAsset[_asset].minLeverage = _minLeverage;
+        _idToAsset[_asset].maxLeverage = _maxLeverage;
+        _idToAsset[_asset].feeMultiplier = _feeMultiplier;
+        _idToAsset[_asset].baseFundingRate = _baseFundingRate;
+
+        emit AssetAdded(_asset, _name);
+    }",[1]
+2654,"    function bondPurchase(uint256 id_, uint256 amountOut_)
+        external
+        onlyWhileActive
+        onlyRole(""operator_reporter"")
+    {
+        if (id_ == RANGE.market(true)) {
+            _updateCapacity(true, amountOut_);
+            _checkCushion(true);
+        }
+        if (id_ == RANGE.market(false)) {
+            _updateCapacity(false, amountOut_);
+            _checkCushion(false);
+        }
+    }",[1]
+2471,"    function notifyRewardAmount(uint256 reward)
+        external
+        override
+        onlyRewardsDistribution
+        updateReward(address(0))
+    {
+        if (block.timestamp >= periodFinish) {
+            rewardRate = reward.div(rewardsDuration);
+        } else {
+            uint256 remaining = periodFinish.sub(block.timestamp);
+            uint256 leftover = remaining.mul(rewardRate);
+            rewardRate = reward.add(leftover).div(rewardsDuration);
+        }
+
+        // Ensure the provided reward amount is not more than the balance in the contract.
+        // This keeps the reward rate in the right range, preventing overflows due to
+        // very high values of rewardRate in the earned and rewardsPerToken functions;
+        // Reward + leftover must be less than 2^256 / 10^18 to avoid overflow.
+        uint256 balance = rewardsToken.balanceOf(address(this));
+        require(
+            rewardRate <= balance.div(rewardsDuration),
+            ""Provided reward too high""
+        );
+
+        lastUpdateTime = block.timestamp;
+        periodFinish = block.timestamp.add(rewardsDuration);
+        emit RewardAdded(reward);
+    }",[12]
+589,"    function _drawing(uint256 _seed) private pure returns (TileData memory tileData) {
+        uint256 res = _seed % SUM_ODDS;
+        uint256 charRandValue = Utils.iteratePRNG(_seed); // Iterate PRNG to not have any biasedness / correlation between random numbers
+        if (res < 32) {
+            // Class is 0 in that case
+            tileData.characterIndex = uint16(charRandValue % NUM_CHARS_EMOJIS);
+        } else {
+            tileData.characterIndex = uint16(charRandValue % NUM_CHARS_LETTERS);
+            if (res < 64) {
+                tileData.fontClass = 1;
+                tileData.characterIndex = uint16(charRandValue % NUM_CHARS_LETTERS_NUMBERS);
+            } else if (res < 80) {
+                tileData.fontClass = 2;
+            } else if (res < 96) {
+                tileData.fontClass = 3 + uint8((res - 80) / 8);
+            } else if (res < 104) {
+                tileData.fontClass = 5 + uint8((res - 96) / 4);
+            } else if (res < 108) {
+                tileData.fontClass = 7 + uint8((res - 104) / 2);
+                if (tileData.fontClass == 7) {
+                    // Set seed for Zalgo to ensure same characters will be always generated for this tile
+                    uint256 zalgoSeed = Utils.iteratePRNG(_seed);
+                    tileData.characterModifier = uint8(zalgoSeed % 256);
+                }
+            } else {
+                tileData.fontClass = 9;
+            }
+        }
+    }","[20, 21, 22, 23, 24]"
+805,"    function currentCharge(Battery storage battery, uint256 supply)
+        internal
+        view
+        returns (uint256 charge)
+    {
+        // {qRTok/hour} = {qRTok} * D18{1/hour} / D18
+        uint256 amtPerHour = (supply * battery.scalingRedemptionRate) / FIX_ONE_256;
+
+        if (battery.redemptionRateFloor > amtPerHour) amtPerHour = battery.redemptionRateFloor;
+
+        // {blocks}
+        uint48 blocks = uint48(block.number) - battery.lastBlock;
+
+        // {qRTok} = {qRTok} + {qRTok/hour} * {blocks} / {blocks/hour}
+        charge = battery.lastCharge + (amtPerHour * blocks) / BLOCKS_PER_HOUR;
+
+        uint256 maxCharge = amtPerHour > supply ? supply : amtPerHour;
+        if (charge > maxCharge) charge = maxCharge;
+    }","[7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]"
+155,"    function rebalanceDown(
+        RebalanceDownQuote memory quote
+    )
+        external
+        onlyRole(REBALANCE_DEFENDER_ROLE)
+        afterCooldownPeriod
+        returns (uint256 lpAmountOut)
+    {
+        if (quote.xETHAmount == 0) revert ZeroValueProvided();
+
+        bool isRebalanceUp = preRebalanceCheck();
+        if (isRebalanceUp) revert RebalanceDownNotAllowed();
+
+        if (quote.xETHAmount > rebalanceDownCap)
+            revert RebalanceDownCapExceeded();
+
+        quote = bestRebalanceDownQuote(quote);
+
+        xETH.mintShares(quote.xETHAmount);
+
+        uint256[2] memory amounts;
+        amounts[xETHIndex] = quote.xETHAmount;
+
+        IERC20(address(xETH)).approve(address(curvePool), quote.xETHAmount);
+
+        lpAmountOut = curvePool.add_liquidity(amounts, quote.minLpReceived);
+
+        IERC20(address(curvePool)).safeTransfer(
+            address(cvxStaker),
+            lpAmountOut
+        );
+        cvxStaker.depositAndStake(lpAmountOut);
+
+        emit RebalanceDownFinished(quote, lpAmountOut);
+    }",[1]
+2113,"  function getBaseGas() external view returns (uint256 baseGas) {
+    assembly {
+      baseGas := sload(_baseGasSlot)
+    }
+  }","[1, 2, 3, 4, 5, 6]"
+4163,"    function setDaPriceCurveLength(uint256 _newTime) public onlyOwner {
+        daPriceCurveLength = _newTime;
+    }",[1]
+2056,"    function accrueDueTokens(address user) public {
+        uint debt = debts[user];
+        if(lastUpdated[user] == block.timestamp) return;
+        uint accrued = (block.timestamp - lastUpdated[user]) * debt / 365 days;
+        dueTokensAccrued[user] += accrued;
+        totalDueTokensAccrued += accrued;
+        lastUpdated[user] = block.timestamp;
+        emit Transfer(user, address(0), accrued);
+    }",[4]
+4129,"    function withdrawExcessRewards(uint poolId) external {
+        Pool storage pool = pools[poolId];
+        require(pool.id == poolId, 'Uninitialized pool');
+        require(pool.totalDepositsWei == 0, 'Cannot withdraw until all deposits are withdrawn');
+        require(block.timestamp > pool.endTime, 'Contract must reach maturity');
+
+        bool success = true;
+        for (uint i = 0; i < pool.rewardTokens.length; i++) {
+            uint rewards = pool.rewardFunding[i];
+            pool.rewardFunding[i] = 0;
+            success = success && IERC20(pool.rewardTokens[i]).transfer(pool.excessBeneficiary, rewards);
+        }
+        require(success, 'Token transfer failed');
+        emit ExcessRewardsWithdrawn(poolId);
+    }",[4]
+2278,"    function recoverEther(uint256 amount) external onlyByOwnGov {
+        (bool success,) = address(owner).call{ value: amount }("""");
+        require(success, ""Invalid transfer"");
+
+        emit EmergencyEtherRecovered(amount);
+    }",[1]
+1222,"    function createPool(
+        address _nftContract,
+        uint256[] calldata _tokenIds,
+        uint256 _initialPrice,
+        uint48 _totalSupply,
+        uint40 _duration,
+        uint256 _quantity,
+        uint256 _raePrice
+    ) external payable {
+        // Reverts if list of tokenIds is empty
+        uint256 length = _tokenIds.length;
+        if (length == 0) revert InsufficientTokenIds();
+
+        // Generates merkle root based on list size of tokenIds
+        bytes32 merkleRoot = (length == 1) ? bytes32(_tokenIds[0]) : _generateRoot(_tokenIds);
+
+        // Sets mapping of poolId to PoolInfo
+        poolInfo[++currentId] = PoolInfo(
+            _nftContract,
+            _totalSupply,
+            uint40(block.timestamp) + _duration,
+            false,
+            merkleRoot
+        );
+
+        // Calculates minimum bid price based on initial price of NFT and desired total supply
+        minBidPrices[currentId] = _initialPrice / _totalSupply;
+
+        // Initializes first bid in queue
+        bidPriorityQueues[currentId].initialize();
+
+        // Emits event for creating new pool
+        emit Create(currentId, _nftContract, _tokenIds, msg.sender, _totalSupply, _duration);
+
+        // Contributes ether into new pool
+        contribute(currentId, _quantity, _raePrice);
+    }",[27]
+316,"    function permit(
+        address spender_, uint256 tokenId_, uint256 deadline_, uint8 v_, bytes32 r_, bytes32 s_
+    ) external {
+        require(block.timestamp <= deadline_, ""ajna/nft-permit-expired"");
+
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                ""\x19\x01"",
+                DOMAIN_SEPARATOR(),
+                keccak256(
+                    abi.encode(
+                        PERMIT_TYPEHASH,
+                        spender_,
+                        tokenId_,
+                        _getAndIncrementNonce(tokenId_),
+                        deadline_
+                    )
+                )
+            )
+        );
+        address owner = ownerOf(tokenId_);
+        require(spender_ != owner, ""ERC721Permit: approval to current owner"");
+
+        if (Address.isContract(owner)) {
+            // bytes4(keccak256(""isValidSignature(bytes32,bytes)"") == 0x1626ba7e
+            require(
+                IERC1271(owner).isValidSignature(digest, abi.encodePacked(r_, s_, v_)) == 0x1626ba7e,
+                ""ajna/nft-unauthorized""
+            );
+        } else {
+            address recoveredAddress = ecrecover(digest, v_, r_, s_);
+            require(recoveredAddress != address(0), ""ajna/nft-invalid-signature"");
+            require(recoveredAddress == owner, ""ajna/nft-unauthorized"");
+        }
+
+        _approve(spender_, tokenId_);
+    }",[1]
+110,"  function getDisapprovalQuantityAt(address policyholder, uint8 role, uint256 timestamp)
+    external
+    view
+    returns (uint128)
+  {
+    if (role != disapprovalRole && !forceDisapprovalRole[role]) return 0;
+    uint128 quantity = policy.getPastQuantity(policyholder, role, timestamp);
+    return quantity > 0 && forceDisapprovalRole[role] ? type(uint128).max : quantity;
+  }",[8]
+3793,"    function setFeeInfo(uint256 _lockFeesIncentive, uint256 _stakerLockFeesIncentive) external {
+        require(msg.sender == feeManager, ""!auth"");
+
+        lockFeesIncentive = _lockFeesIncentive;
+        stakerLockFeesIncentive = _stakerLockFeesIncentive;
+
+        address _feeToken = IFeeDistro(feeDistro).token();
+        if (feeToken != _feeToken) {
+            //create a new reward contract for the new token
+            lockFees = IRewardFactory(rewardFactory).CreateTokenRewards(_feeToken, lockRewards);
+
+            if (_feeToken != veAsset) {
+                IRewards(stakerLockRewards).addReward(
+                    _feeToken,
+                    address(0),
+                    address(0),
+                    address(0),
+                    address(this),
+                    false
+                );
+            }
+
+            feeToken = _feeToken;
+        }
+    }",[1]
+1561,"    function executeTransfer(
+        MintableERC721Data storage erc721Data,
+        IPool POOL,
+        bool ATOMIC_PRICING,
+        address from,
+        address to,
+        uint256 tokenId
+    ) public {
+        require(
+            erc721Data.owners[tokenId] == from,
+            ""ERC721: transfer from incorrect owner""
+        );
+        require(to != address(0), ""ERC721: transfer to the zero address"");
+        require(
+            !isAuctioned(erc721Data, POOL, tokenId),
+            Errors.TOKEN_IN_AUCTION
+        );
+
+        _beforeTokenTransfer(erc721Data, from, to, tokenId);
+
+        // Clear approvals from the previous owner
+        _approve(erc721Data, address(0), tokenId);
+
+        uint64 oldSenderBalance = erc721Data.userState[from].balance;
+        erc721Data.userState[from].balance = oldSenderBalance - 1;
+        uint64 oldRecipientBalance = erc721Data.userState[to].balance;
+        uint64 newRecipientBalance = oldRecipientBalance + 1;
+        _checkBalanceLimit(erc721Data, ATOMIC_PRICING, newRecipientBalance);
+        erc721Data.userState[to].balance = newRecipientBalance;
+        erc721Data.owners[tokenId] = to;
+
+        if (from != to && erc721Data.auctions[tokenId].startTime > 0) {
+            delete erc721Data.auctions[tokenId];
+        }
+
+        IRewardController rewardControllerLocal = erc721Data.rewardController;
+        if (address(rewardControllerLocal) != address(0)) {
+            uint256 oldTotalSupply = erc721Data.allTokens.length;
+            rewardControllerLocal.handleAction(
+                from,
+                oldTotalSupply,
+                oldSenderBalance
+            );
+            if (from != to) {
+                rewardControllerLocal.handleAction(
+                    to,
+                    oldTotalSupply,
+                    oldRecipientBalance
+                );
+            }
+        }
+
+        emit Transfer(from, to, tokenId);
+    }",[28]
+4567,"    function _getPastDelegate(address account, uint256 blockNumber) internal view returns (address) {
+        require(blockNumber < block.number, ""hPAL: invalid blockNumber"");
+
+        // no checkpoints written
+        uint256 nbCheckpoints = delegateCheckpoints[account].length;
+        if (nbCheckpoints == 0) return address(0);
+
+        // last checkpoint check
+        if (delegateCheckpoints[account][nbCheckpoints - 1].fromBlock <= blockNumber) {
+            return delegateCheckpoints[account][nbCheckpoints - 1].delegate;
+        }
+
+        // no checkpoint old enough
+        if (delegateCheckpoints[account][0].fromBlock > blockNumber) return address(0);
+
+        uint256 high = nbCheckpoints - 1; // last checkpoint already checked
+        uint256 low = 0;
+        uint256 mid;
+        while (low < high) {
+            mid = Math.average(low, high);
+            if (delegateCheckpoints[account][mid].fromBlock == blockNumber) {
+                return delegateCheckpoints[account][mid].delegate;
+            }
+            if (delegateCheckpoints[account][mid].fromBlock > blockNumber) {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        return high == 0 ? address(0) : delegateCheckpoints[account][high - 1].delegate;
+    }",[1]
+4097,"    function wrap(uint256 amount, address recipient) external override returns (uint256) {
+        TokenUtils.safeTransferFrom(underlyingToken, msg.sender, address(this), amount);
+        TokenUtils.safeApprove(underlyingToken, token, amount);
+
+        return IYearnVaultV2(token).deposit(amount, recipient);
+    }","[1, 2, 3]"
+3521,"    function claimBribesFromHiddenHand(IRewardDistributor hiddenHandDistributor, IRewardDistributor.Claim[] calldata _claims) external nonReentrant {
+        _onlyGovernanceOrStrategist();
+        require(address(bribesProcessor) != address(0), ""Bribes processor not set"");
+
+        uint256 beforeVaultBalance = _getBalance();
+        uint256 beforePricePerFullShare = _getPricePerFullShare();
+
+        // Hidden hand uses BRIBE_VAULT address as a substitute for ETH
+        address hhBribeVault = hiddenHandDistributor.BRIBE_VAULT();
+
+        // Track token balances before bribes claim
+        uint256[] memory beforeBalance = new uint256[](_claims.length);
+        for (uint256 i = 0; i < _claims.length; i++) {
+            (address token, , , ) = hiddenHandDistributor.rewards(_claims[i].identifier);
+            if (token == hhBribeVault) {
+                beforeBalance[i] = address(this).balance;
+            } else {
+                beforeBalance[i] = IERC20Upgradeable(token).balanceOf(address(this));
+            }
+        }
+
+        // Claim bribes
+        isClaimingBribes = true;
+        hiddenHandDistributor.claim(_claims);
+        isClaimingBribes = false;
+
+        bool nonZeroDiff; // Cached value but also to check if we need to notifyProcessor
+        // Ultimately it's proof of non-zero which is good enough
+
+        for (uint256 i = 0; i < _claims.length; i++) {
+            (address token, , , ) = hiddenHandDistributor.rewards(_claims[i].identifier);
+
+            if (token == hhBribeVault) {
+                // ETH
+                uint256 difference = address(this).balance.sub(beforeBalance[i]);
+                if (difference > 0) {
+                    IWeth(address(WETH)).deposit{value: difference}();
+                    nonZeroDiff = true;
+                    _handleRewardTransfer(address(WETH), difference);
+                }
+            } else {
+                uint256 difference = IERC20Upgradeable(token).balanceOf(address(this)).sub(beforeBalance[i]);
+                if (difference > 0) {
+                    nonZeroDiff = true;
+                    _handleRewardTransfer(token, difference);
+                }
+            }
+        }
+
+        if (nonZeroDiff) {
+            _notifyBribesProcessor();
+        }
+
+        require(beforeVaultBalance == _getBalance(), ""Balance can't change"");
+        require(beforePricePerFullShare == _getPricePerFullShare(), ""Ppfs can't change"");
+    }",[1]
+1926,"    modifier atState(Auction storage a, States _state) {
+        if (block.timestamp < a.timings.startTimestamp) {
+            if (_state != States.Created) revert InvalidState();
+        } else if (block.timestamp < a.timings.endTimestamp) {
+            if (_state != States.AcceptingBids) revert InvalidState();
+        } else if (a.data.lowestQuote != type(uint128).max) {
+            if (_state != States.Finalized) revert InvalidState();
+        } else if (block.timestamp <= a.timings.endTimestamp + 24 hours) {
+            if (_state != States.RevealPeriod) revert InvalidState();
+        } else if (block.timestamp > a.timings.endTimestamp + 24 hours) {
+            if (_state != States.Voided) revert InvalidState();
+        } else {
+            revert();
+        }
+        _;
+    }",[6]
+2117,"  function _numberOfReservedTokensOutstandingFor(
+    address _nft,
+    uint256 _tierId,
+    JBStored721Tier memory _storedTier
+  ) internal view returns (uint256) {
+    // Invalid tier or no reserved rate?
+    if (_storedTier.initialQuantity == 0 || _storedTier.reservedRate == 0) return 0;
+
+    // No token minted yet? Round up to 1.
+    if (_storedTier.initialQuantity == _storedTier.remainingQuantity) return 1;
+
+    // The number of reserved tokens of the tier already minted.
+    uint256 _reserveTokensMinted = numberOfReservesMintedFor[_nft][_tierId];
+
+    // If only the reserved token (from the rounding up) has been minted so far, return 0.
+    if (_storedTier.initialQuantity - _reserveTokensMinted == _storedTier.remainingQuantity)
+      return 0;
+
+    // Get a reference to the number of tokens already minted in the tier, not counting reserves or burned tokens.
+    uint256 _numberOfNonReservesMinted = _storedTier.initialQuantity -
+      _storedTier.remainingQuantity -
+      _reserveTokensMinted;
+
+    // Store the numerator common to the next two calculations.
+    uint256 _numerator = uint256(_numberOfNonReservesMinted * _storedTier.reservedRate);
+
+    // Get the number of reserved tokens mintable given the number of non reserved tokens minted. This will round down.
+    uint256 _numberReservedTokensMintable = _numerator / JBConstants.MAX_RESERVED_RATE;
+
+    // Round up.
+    if (_numerator - JBConstants.MAX_RESERVED_RATE * _numberReservedTokensMintable > 0)
+      ++_numberReservedTokensMintable;
+
+    // Return the difference between the amount mintable and the amount already minted.
+    return _numberReservedTokensMintable - _reserveTokensMinted;
+  }",[10]
+4522,"    function increaseLock(uint256 amount) external {
+        if(emergency) revert EmergencyBlock();
+        require(userLocks[msg.sender].length != 0, ""hPAL: No Lock"");
+        // Find the current Lock
+        uint256 currentUserLockIndex = userLocks[msg.sender].length - 1;
+        UserLock storage currentUserLock = userLocks[msg.sender][currentUserLockIndex];
+        // Update user rewards before any change on their balance (staked and locked)
+        _updateUserRewards(msg.sender);
+        // Call the _lock method with the current duration, and the new amount
+        _lock(msg.sender, amount, currentUserLock.duration, LockAction.INCREASE_AMOUNT);
+    }",[1]
+4723,"    function getSharesForAmount(uint256 _amount)
+        external
+        view
+        override
+        returns (uint256)
+    {
+        uint256 _totalAssets = totalAssets();
+        return
+            (_totalAssets > 0)
+                ? ((_amount * totalSupply()) / _totalAssets)
+                : 0;
+    }",[11]
+4354,"    function mint(address _recipient) external override {
+        address feePool = IIndexRegistry(registry).feePool();
+        _chargeAUMFee(feePool);
+
+        IPhuturePriceOracle oracle = IPhuturePriceOracle(IIndexRegistry(registry).priceOracle());
+
+        uint lastAssetBalanceInBase;
+        uint minAmountInBase = type(uint).max;
+        for (uint i; i < assets.length(); ++i) {
+            require(IAccessControl(registry).hasRole(ASSET_ROLE, assets.at(i)), ""Index: INVALID_ASSET"");
+            if (weightOf[assets.at(i)] == 0) {
+                continue;
+            }
+            uint assetPerBaseInUQ = oracle.refreshedAssetPerBaseInUQ(assets.at(i));
+            // Q_b * w_i * p_i = Q_i
+            // Q_b = Q_i / (w_i * p_i)
+            IvToken vToken = IvToken(IvTokenFactory(vTokenFactory).createOrReturnVTokenOf(assets.at(i)));
+            uint amountInAsset = IERC20(assets.at(i)).balanceOf(address(vToken)) - vToken.lastBalance();
+            uint weightedPrice = assetPerBaseInUQ * weightOf[assets.at(i)];
+            uint _minAmountInBase = amountInAsset.mulDiv(FixedPoint112.Q112 * IndexLibrary.MAX_WEIGHT, weightedPrice);
+            if (_minAmountInBase < minAmountInBase) {
+                minAmountInBase = _minAmountInBase;
+            }
+            uint lastBalanceInAsset = vToken.lastAssetBalanceOf(address(this));
+            vToken.mint();
+            uint balanceInBase = lastBalanceInAsset.mulDiv(FixedPoint112.Q112, assetPerBaseInUQ);
+            lastAssetBalanceInBase += balanceInBase;
+        }
+
+        for (uint i; i < inactiveAssets.length(); ++i) {
+            if (!IAccessControl(registry).hasRole(SKIPPED_ASSET_ROLE, inactiveAssets.at(i))) {
+                uint lastBalanceInAsset = IvToken(
+                    IvTokenFactory(vTokenFactory).createOrReturnVTokenOf(inactiveAssets.at(i))
+                ).lastAssetBalanceOf(address(this));
+                lastAssetBalanceInBase += lastBalanceInAsset.mulDiv(
+                    FixedPoint112.Q112,
+                    oracle.refreshedAssetPerBaseInUQ(inactiveAssets.at(i))
+                );
+            }
+        }
+
+        assert(minAmountInBase != type(uint).max);
+
+        uint value;
+        if (totalSupply() != 0) {
+            require(lastAssetBalanceInBase > 0, ""Index: INSUFFICIENT_AMOUNT"");
+            value =
+                (oracle.convertToIndex(minAmountInBase, decimals()) * totalSupply()) /
+                oracle.convertToIndex(lastAssetBalanceInBase, decimals());
+        } else {
+            value = oracle.convertToIndex(minAmountInBase, decimals()) - IndexLibrary.INITIAL_QUANTITY;
+            _mint(address(0xdead), IndexLibrary.INITIAL_QUANTITY);
+        }
+
+        uint fee = (value * IFeePool(feePool).mintingFeeInBPOf(address(this))) / BP.DECIMAL_FACTOR;
+        if (fee > 0) {
+            _mint(feePool, fee);
+            value -= fee;
+        }
+
+        _mint(_recipient, value);
+    }",[18]
+4696,"    function diamondCut(
+        FacetCut[] calldata _diamondCut,
+        address _init,
+        bytes calldata _calldata
+    ) external override {
+        LibDiamond.enforceIsContractOwner();
+        LibDiamond.diamondCut(_diamondCut, _init, _calldata);
+    }","[1, 2, 3, 4, 5, 6, 7, 8, 9]"
+1174,"    function execute(address dest, uint value, bytes calldata func) external onlyOwner{
+        _requireFromEntryPointOrOwner();
+        _call(dest, value, func);
+    }","[1, 2]"
+5001,"    function enterShelter(uint256[] calldata _pids) external onlyOwner {
+        for(uint256 i = 0; i<_pids.length; i++){
+            IRewardStaking pool = IRewardStaking(convexPool[_pids[i]]);
+            uint256 amount = pool.balanceOf(address(this));
+            pool.withdrawAndUnwrap(amount, false);
+            IERC20 lpToken = IERC20(
+                pool.poolInfo(_pids[i]).lptoken
+            );
+            amountInShelter[lpToken] = amount;
+            lpToken.safeTransfer(address(shelter), amount);
+            shelter.activate(lpToken);
+        }
+    }","[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]"
+4981,"    function provide(uint256 _minimumLP) external onlyGuardian {
+        require(usdm.balanceOf(address(this)) >= totalLiquidity.usdm, ""<liquidity"");
+        // truncate amounts under step
+        uint256 addingLiquidity = (usdm.balanceOf(address(this)) / step) * step;
+        // match usdm : pool3 = 1 : 1
+        uint256[2] memory amounts = [addingLiquidity, addingLiquidity];
+        usdm.approve(address(usdm3crv), addingLiquidity);
+        pool3.approve(address(usdm3crv), addingLiquidity);
+        usdm3crv.add_liquidity(amounts, _minimumLP);
+    }",[1]
+897,"  function withdraw(
+    IERC4626 vault,
+    address to,
+    uint256 amount,
+    uint256 maxSharesOut
+  ) public payable virtual override returns (uint256 sharesOut) {
+    if ((sharesOut = vault.withdraw(amount, to, msg.sender)) > maxSharesOut) {
+      revert MaxSharesError();
+    }
+  }","[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]"
+161,"    function removeLiquidityOnlyStETH(
+        uint256 lpAmount,
+        uint256 minStETHOut
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        /// @dev check if AMO owns enough LP
+        uint256 amoBalance = cvxStaker.stakedBalance();
+
+        if (lpAmount > amoBalance) {
+            revert LpBalanceTooLow();
+        }
+
+        cvxStaker.withdrawAndUnwrap(lpAmount, false, address(this));
+
+        uint256[2] memory minAmounts;
+
+        minAmounts[stETHIndex] = minStETHOut;
+
+        uint256 output = curvePool.remove_liquidity_one_coin(
+            lpAmount,
+            int128(int(stETHIndex)),
+            minStETHOut
+        );
+
+        stETH.safeTransfer(msg.sender, output);
+    }","[6, 7, 8, 9, 10]"
+905,"  function commitToLien(
+    IAstariaRouter.Commitment calldata params,
+    address receiver
+  )
+    external
+    whenNotPaused
+    returns (uint256 lienId, ILienToken.Stack[] memory stack, uint256 payout)
+  {
+    _beforeCommitToLien(params);
+    uint256 slopeAddition;
+    (lienId, stack, slopeAddition, payout) = _requestLienAndIssuePayout(
+      params,
+      receiver
+    );
+    _afterCommitToLien(
+      stack[stack.length - 1].point.end,
+      lienId,
+      slopeAddition
+    );
+  }",[1]
+720,"  function swap(address to, uint256 amount0Out, uint256 amount1Out, bytes calldata data) external override nonReentrant {
+    if (amount0Out == 0 && amount1Out == 0) revert InsufficientOutputError();
+
+    uint120 _reserve0 = reserve0; // SLOAD
+    uint120 _reserve1 = reserve1; // SLOAD
+
+    if (amount0Out > 0) SafeTransferLib.safeTransfer(token0, to, amount0Out);
+    if (amount1Out > 0) SafeTransferLib.safeTransfer(token1, to, amount1Out);
+
+    uint256 balance0Before = Balance.balance(token0);
+    uint256 balance1Before = Balance.balance(token1);
+    ISwapCallback(msg.sender).swapCallback(amount0Out, amount1Out, data);
+    uint256 amount0In = Balance.balance(token0) - balance0Before;
+    uint256 amount1In = Balance.balance(token1) - balance1Before;
+
+    if (!invariant(_reserve0 + amount0In - amount0Out, _reserve1 + amount1In - amount1Out, totalLiquidity)) {
+      revert InvariantError();
+    }
+
+    reserve0 = _reserve0 + SafeCast.toUint120(amount0In) - SafeCast.toUint120(amount0Out); // SSTORE
+    reserve1 = _reserve1 + SafeCast.toUint120(amount1In) - SafeCast.toUint120(amount1Out); // SSTORE
+
+    emit Swap(amount0Out, amount1Out, amount0In, amount1In, to);
+  }","[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]"
+4812,"  function set(
+    Lockups storage lockups,
+    uint256 index,
+    uint256 expiration,
+    uint256 totalAmount
+  ) internal {
+    unchecked {
+      uint256 lockedBalanceBits = totalAmount | (expiration << 96);
+      if (index % 2 == 0) {
+        // set first 128 bits.
+        index /= 2;
+        lockups.lockups[index] = (lockups.lockups[index] & last128BitsMask) | (lockedBalanceBits << 128);
+      } else {
+        // set last 128 bits.
+        index /= 2;
+        lockups.lockups[index] = (lockups.lockups[index] & first128BitsMask) | lockedBalanceBits;
+      }
+    }
+  }",[8]
+650,"    function _updateRewardSumAndProduct(address _collateral, uint _collGainPerUnitStaked, uint _LUSDLossPerUnitStaked) internal {
+        uint currentP = P;
+        uint newP;
+
+        assert(_LUSDLossPerUnitStaked <= DECIMAL_PRECISION);
+        /*
+        * The newProductFactor is the factor by which to change all deposits, due to the depletion of Stability Pool LUSD in the liquidation.
+        * We make the product factor 0 if there was a pool-emptying. Otherwise, it is (1 - LUSDLossPerUnitStaked)
+        */
+        uint newProductFactor = uint(DECIMAL_PRECISION).sub(_LUSDLossPerUnitStaked);
+
+        uint128 currentScaleCached = currentScale;
+        uint128 currentEpochCached = currentEpoch;
+        uint currentS = epochToScaleToSum[currentEpochCached][currentScaleCached][_collateral];
+
+        /*
+        * Calculate the new S first, before we update P.
+        * The collateral gain for any given depositor from a liquidation depends on the value of their deposit
+        * (and the value of totalDeposits) prior to the Stability being depleted by the debt in the liquidation.
+        *
+        * Since S corresponds to collateral gain, and P to deposit loss, we update S first.
+        */
+        uint marginalCollGain = _collGainPerUnitStaked.mul(currentP);
+        uint newS = currentS.add(marginalCollGain);
+        epochToScaleToSum[currentEpochCached][currentScaleCached][_collateral] = newS;
+        emit S_Updated(_collateral, newS, currentEpochCached, currentScaleCached);
+
+        // If the Stability Pool was emptied, increment the epoch, and reset the scale and product P
+        if (newProductFactor == 0) {
+            currentEpoch = currentEpochCached.add(1);
+            emit EpochUpdated(currentEpoch);
+            currentScale = 0;
+            emit ScaleUpdated(currentScale);
+            newP = DECIMAL_PRECISION;
+
+        // If multiplying P by a non-zero product factor would reduce P below the scale boundary, increment the scale
+        } else if (currentP.mul(newProductFactor).div(DECIMAL_PRECISION) < SCALE_FACTOR) {
+            newP = currentP.mul(newProductFactor).mul(SCALE_FACTOR).div(DECIMAL_PRECISION); 
+            currentScale = currentScaleCached.add(1);
+            emit ScaleUpdated(currentScale);
+        } else {
+            newP = currentP.mul(newProductFactor).div(DECIMAL_PRECISION);
+        }
+
+        assert(newP > 0);
+        P = newP;
+
+        emit P_Updated(newP);
+    }","[29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49]"
+4422,"    function deposit(uint256 _pid, uint256 _amount)
+        external
+        noContract(msg.sender)
+    {
+        require(_amount > 0, ""invalid_amount"");
+
+        PoolInfo storage pool = poolInfo[_pid];
+        UserInfo storage user = userInfo[_pid][msg.sender];
+        _updatePool(_pid);
+        _withdrawReward(_pid);
+
+        pool.lpToken.safeTransferFrom(msg.sender, address(this), _amount);
+        user.amount = user.amount + _amount;
+
+        emit Deposit(msg.sender, _pid, _amount);
+    }",[1]
+4635,"    function _kick(address user, address kicker) internal {
+        require(user != address(0) && kicker != address(0), ""hPAL: Address Zero"");
+        require(userLocks[user].length > 0, ""hPAL: No Lock"");
+
+        // Get the user to kick current Lock
+        // and calculate the end of the Lock
+        uint256 currentUserLockIndex = userLocks[user].length - 1;
+        UserLock storage currentUserLock = userLocks[user][currentUserLockIndex];
+        uint256 userCurrentLockEnd = currentUserLock.startTimestamp + currentUserLock.duration;
+
+        require(block.timestamp > userCurrentLockEnd, ""hPAL: Not expired"");
+        require(currentUserLock.amount > 0, ""hPAL: No Lock"");
+
+        require(block.timestamp > userCurrentLockEnd + UNLOCK_DELAY, ""hPAL: Not kickable"");
+
+        // Remove amount from total locked supply
+        currentTotalLocked -= currentUserLock.amount;
+        totalLocks.push(TotalLock(
+            safe224(currentTotalLocked),
+            safe32(block.number)
+        ));
+
+        // Set an empty Lock for the user
+        userLocks[user].push(UserLock(
+            safe128(0),
+            safe48(block.timestamp),
+            safe48(0),
+            safe32(block.number)
+        ));
+
+        // Remove the bonus multiplier
+        userCurrentBonusRatio[user] = 0;
+        userBonusRatioDecrease[user] = 0;
+
+        // Calculate the penalty for the Lock
+        uint256 nbWeeksOverLockTime = (block.timestamp - userCurrentLockEnd) / WEEK;
+        uint256 penaltyPercent = nbWeeksOverLockTime * kickRatioPerWeek;
+        uint256 penaltyAmount = penaltyPercent >= MAX_BPS ? 
+            currentUserLock.amount : 
+            (currentUserLock.amount * penaltyPercent) / MAX_BPS;
+
+        // Send penalties to the kicker
+        _transfer(user, kicker, penaltyAmount);
+
+        emit Kick(user, kicker, currentUserLock.amount, penaltyAmount, currentTotalLocked);
+    }","[18, 24]"
+3979,"    function cancel(uint256 id)
+        public
+        override
+        can_cancel(id)
+        returns (bool success)
+    {
+        require(!locked, ""Reentrancy attempt"");
+        if (matchingEnabled) {
+            if (isOfferSorted(id)) {
+                require(_unsort(id));
+            } else {
+                require(_hide(id));
+            }
+        }
+        return super.cancel(id); //delete the offer.
+    }","[8, 9, 10, 11, 12, 13, 14]"
+620,"    function claimable(uint256 ticketId) external view override returns (uint256 claimableAmount, uint8 winTier) {
+        TicketInfo memory ticketInfo = ticketsInfo[ticketId];
+        if (!ticketInfo.claimed) {
+            uint120 _winningTicket = winningTicket[ticketInfo.drawId];
+            winTier = TicketUtils.ticketWinTier(ticketInfo.combination, _winningTicket, selectionSize, selectionMax);
+            if (block.timestamp <= ticketRegistrationDeadline(ticketInfo.drawId + LotteryMath.DRAWS_PER_YEAR)) {
+                claimableAmount = winAmount[ticketInfo.drawId][winTier];
+            }
+        }
+    }","[6, 7, 8]"
+1279,"	function redeemAVAX(uint256 shares) public returns (uint256 assets) {
+		// Check for rounding error since we round down in previewRedeem.
+		if ((assets = previewRedeem(shares)) == 0) {
+			revert ZeroAssets();
+		}
+		beforeWithdraw(assets, shares);
+		_burn(msg.sender, shares);
+
+		emit Withdraw(msg.sender, msg.sender, msg.sender, assets, shares);
+
+		IWAVAX(address(asset)).withdraw(assets);
+		msg.sender.safeTransferETH(assets);
+	}",[1]
+3109,"    function setDistributor(address _distributor) external onlyOwner {
+        if (address(distributor) == address(0)) {
+            distributor = Distributor(_distributor);
+        } else {
+            pendingDistributor = _distributor;
+            distributorEnableDate = block.timestamp + 1 days;
+        }
+    }","[1, 2, 3, 4, 5, 6, 7, 8, 9]"
+2144,"  function _payoutEth() private {
+    address payable[] memory addresses = _getPayoutAddresses();
+    uint256[] memory bps = _getPayoutBps();
+    uint256 length = addresses.length;
+    // accommodating the 2300 gas stipend
+    // adding 1x for each item in array to accomodate rounding errors
+    uint256 gasCost = (23300 * length) + length;
+    uint256 balance = address(this).balance;
+    require(balance - gasCost > 10000, ""PA1D: Not enough ETH to transfer"");
+    balance = balance - gasCost;
+    uint256 sending;
+    // uint256 sent;
+    for (uint256 i = 0; i < length; i++) {
+      sending = ((bps[i] * balance) / 10000);
+      addresses[i].transfer(sending);
+      // sent = sent + sending;
+    }
+  }","[10, 14]"
+2832,"    function _deploySecond(
+        string memory _name,
+        address _pairAddress,
+        bytes memory _configData,
+        address[] memory _approvedBorrowers,
+        address[] memory _approvedLenders
+    ) private {
+        (, , , , , , bytes memory _rateInitData) = abi.decode(
+            _configData,
+            (address, address, address, address, uint256, address, bytes)
+        );
+        require(deployedPairsByName[_name] == address(0), ""FraxlendPairDeployer: Pair name must be unique"");
+        deployedPairsByName[_name] = _pairAddress;
+        deployedPairsArray.push(_name);
+
+        // Set additional values for FraxlendPair
+        IFraxlendPair _fraxlendPair = IFraxlendPair(_pairAddress);
+        _fraxlendPair.initialize(_name, _approvedBorrowers, _approvedLenders, _rateInitData);
+
+        // Transfer Ownership of FraxlendPair
+        _fraxlendPair.transferOwnership(COMPTROLLER_ADDRESS);
+    }",[12]
+4165,"    function setDaDropInterval(uint256 _newTime) public onlyOwner {
+        daDropInterval = _newTime;
+    }",[1]
+3939,"    function setFeeBPS(uint256 _feeBPS) external onlyBathHouse {
+        feeBPS = _feeBPS;
+    }",[2]
+3686,"    function _approve(
+        ISetToken _setToken,
+        IWrappedfCashComplete _fCashPosition,
+        IERC20 _sendToken,
+        uint256 _maxAssetAmount
+    )
+    internal
+    {
+        if(IERC20(_sendToken).allowance(address(_setToken), address(_fCashPosition)) < _maxAssetAmount) {
+            bytes memory approveCallData = abi.encodeWithSelector(_sendToken.approve.selector, address(_fCashPosition), _maxAssetAmount);
+            _setToken.invoke(address(_sendToken), 0, approveCallData);
+        }
+    }",[1]
+4269,"    function _requestLoan(
+        address collateralProvider,
+        uint256 tokenId,
+        TokenLoanParams memory params,
+        address to,
+        bool skim
+    ) private {
+        // Edge case: valuation can be zero. That effectively gifts the NFT and
+        // is therefore a bad idea, but does not break the contract.
+        require(tokenLoan[tokenId].status == LOAN_INITIAL, ""NFTPair: loan exists"");
+        if (skim) {
+            require(collateral.ownerOf(tokenId) == address(this), ""NFTPair: skim failed"");
+        } else {
+            collateral.transferFrom(collateralProvider, address(this), tokenId);
+        }
+        TokenLoan memory loan;
+        loan.borrower = to;
+        loan.status = LOAN_REQUESTED;
+        tokenLoan[tokenId] = loan;
+        tokenLoanParams[tokenId] = params;
+
+        emit LogRequestLoan(to, tokenId, params.valuation, params.duration, params.annualInterestBPS, params.ltvBPS);
+    }",[14]
+4738,"    function _getExpiryPrice(
+        IEACAggregatorProxy aggregator,
+        uint256 _expiryTimestamp,
+        uint256 _roundIdAfterExpiry,
+        uint256 _expiryRoundId
+    ) internal view override returns (uint256 price, uint256 roundId) {
+        if (
+            aggregator.getTimestamp(uint256(_expiryRoundId)) == _expiryTimestamp
+        ) {
+            price = uint256(aggregator.getAnswer(_expiryRoundId));
+            roundId = _expiryRoundId;
+        } else {
+            price = uint256(aggregator.getAnswer(_roundIdAfterExpiry));
+            roundId = _roundIdAfterExpiry;
+        }
+    }","[10, 13]"
+3937,"    function setFeeBPS(uint256 _newFeeBPS) external auth returns (bool) {
+        feeBPS = _newFeeBPS;
+        return true;
+    }",[2]
+608,"    function calculateNewProfit(
+        int256 oldProfit,
+        uint256 ticketsSold,
+        uint256 ticketPrice,
+        bool jackpotWon,
+        uint256 fixedJackpotSize,
+        uint256 expectedPayout
+    )
+        internal
+        pure
+        returns (int256 newProfit)
+    {
+        uint256 ticketsSalesToPot = (ticketsSold * ticketPrice).getPercentage(TICKET_PRICE_TO_POT);
+        newProfit = oldProfit + int256(ticketsSalesToPot);
+
+        uint256 expectedRewardsOut = jackpotWon
+            ? calculateReward(oldProfit, fixedJackpotSize, fixedJackpotSize, ticketsSold, true, expectedPayout)
+            : calculateMultiplier(calculateExcessPot(oldProfit, fixedJackpotSize), ticketsSold, expectedPayout)
+                * ticketsSold * expectedPayout;
+
+        newProfit -= int256(expectedRewardsOut);
+    }","[16, 17, 18, 19]"
+1590,"    function redeemPxGlpETH(
+        uint256 amount,
+        uint256 minOut,
+        address receiver
+    )
+        external
+        whenNotPaused
+        nonReentrant
+        returns (
+            uint256,
+            uint256,
+            uint256
+        )
+    {
+        return _redeemPxGlp(address(0), amount, minOut, receiver);
+    }",[1]
+206,"    function healAccount(address user) external {
+        VToken[] memory userAssets = accountAssets[user];
+        uint256 userAssetsCount = userAssets.length;
+
+        address liquidator = msg.sender;
+        // We need all user's markets to be fresh for the computations to be correct
+        for (uint256 i; i < userAssetsCount; ++i) {
+            userAssets[i].accrueInterest();
+            oracle.updatePrice(address(userAssets[i]));
+        }
+
+        AccountLiquiditySnapshot memory snapshot = _getCurrentLiquiditySnapshot(user, _getLiquidationThreshold);
+
+        if (snapshot.totalCollateral > minLiquidatableCollateral) {
+            revert CollateralExceedsThreshold(minLiquidatableCollateral, snapshot.totalCollateral);
+        }
+
+        if (snapshot.shortfall == 0) {
+            revert InsufficientShortfall();
+        }
+
+        // percentage = collateral / (borrows * liquidation incentive)
+        Exp memory collateral = Exp({ mantissa: snapshot.totalCollateral });
+        Exp memory scaledBorrows = mul_(
+            Exp({ mantissa: snapshot.borrows }),
+            Exp({ mantissa: liquidationIncentiveMantissa })
+        );
+
+        Exp memory percentage = div_(collateral, scaledBorrows);
+        if (lessThanExp(Exp({ mantissa: mantissaOne }), percentage)) {
+            revert CollateralExceedsThreshold(scaledBorrows.mantissa, collateral.mantissa);
+        }
+
+        for (uint256 i; i < userAssetsCount; ++i) {
+            VToken market = userAssets[i];
+
+            (uint256 tokens, uint256 borrowBalance, ) = _safeGetAccountSnapshot(market, user);
+            uint256 repaymentAmount = mul_ScalarTruncate(percentage, borrowBalance);
+
+            // Seize the entire collateral
+            if (tokens != 0) {
+                market.seize(liquidator, user, tokens);
+            }
+            // Repay a certain percentage of the borrow, forgive the rest
+            if (borrowBalance != 0) {
+                market.healBorrow(liquidator, user, repaymentAmount);
+            }
+        }
+    }",[1]
+3744,"    function _userCheckpoint(
+        address user,
+        uint256 amountAdded,
+        uint256 newTotal
+    ) internal {
+        RewardTokenData storage curRewardTokenData = rewardTokenData[rewardToken];
+
+        // Compute the share earned by the user since they last updated
+        uint256 userBalance = balances[user];
+        if (userBalance > 0) {
+            curRewardTokenData.userShares[user] += (curRewardTokenData.feeIntegral -
+                curRewardTokenData.userFeeIntegrals[user]).scaledMul(
+                    userBalance.scaledMul(boostFactors[user])
+                );
+
+            // Update values for previous rewardTokens
+            if (lastUpdated[user] < lastMigrationEvent) {
+                uint256 length = _replacedRewardTokens.length();
+                for (uint256 i; i < length; i = i.uncheckedInc()) {
+                    (address token, uint256 replacedAt) = _replacedRewardTokens.at(i);
+                    if (lastUpdated[user] < replacedAt) {
+                        RewardTokenData storage prevRewardTokenData = rewardTokenData[token];
+                        prevRewardTokenData.userShares[user] += (prevRewardTokenData.feeIntegral -
+                            prevRewardTokenData.userFeeIntegrals[user]).scaledMul(
+                                userBalance.scaledMul(boostFactors[user])
+                            );
+                        prevRewardTokenData.userFeeIntegrals[user] = prevRewardTokenData
+                            .feeIntegral;
+                    }
+                }
+            }
+        }
+
+        uint256 newBoost = computeNewBoost(user, amountAdded, newTotal);
+        totalLockedBoosted =
+            totalLockedBoosted +
+            newTotal.scaledMul(newBoost) -
+            balances[user].scaledMul(boostFactors[user]);
+
+        // Update user values
+        curRewardTokenData.userFeeIntegrals[user] = curRewardTokenData.feeIntegral;
+        lastUpdated[user] = block.timestamp;
+        boostFactors[user] = newBoost;
+        balances[user] = newTotal;
+    }","[11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]"
+4945,"    function _submitOutOrders(
+        uint256 _nftId,
+        BatchedOutputOrders calldata _batchedOrders,
+        bool _toReserve
+    ) private returns (uint256 feesAmount, uint256 amountBought) {
+        uint256 batchLength = _batchedOrders.orders.length;
+        require(batchLength != 0, ""NF: INVALID_ORDERS"");
+        require(_batchedOrders.amounts.length == batchLength, ""NF: INPUTS_LENGTH_MUST_MATCH"");
+        amountBought = _batchedOrders.outputToken.balanceOf(address(this));
+
+        IERC20 _inputToken;
+        uint256 _inputTokenAmount;
+        for (uint256 i = 0; i < _batchedOrders.orders.length; i++) {
+            (_inputToken, _inputTokenAmount) = _transferInputTokens(
+                _nftId,
+                IERC20(_batchedOrders.orders[i].token),
+                _batchedOrders.amounts[i],
+                true
+            );
+
+            // Submit order and update holding of spent token
+            uint256 amountSpent = _submitOrder(
+                address(_inputToken),
+                address(_batchedOrders.outputToken),
+                _nftId,
+                _batchedOrders.orders[i],
+                false
+            );
+            require(amountSpent <= _inputTokenAmount, ""NF: OVERSPENT"");
+
+            uint256 underSpentAmount = _inputTokenAmount - amountSpent;
+            if (underSpentAmount != 0) {
+                _inputToken.safeTransfer(address(reserve), underSpentAmount);
+            }
+
+            _decreaseHoldingAmount(_nftId, address(_inputToken), _inputTokenAmount - underSpentAmount);
+        }
+
+        amountBought = _batchedOrders.outputToken.balanceOf(address(this)) - amountBought;
+        feesAmount = amountBought / 100; // 1% Fee
+
+        if (_toReserve) {
+            _transferToReserveAndStore(_batchedOrders.outputToken, amountBought - feesAmount, _nftId);
+        }
+    }","[14, 15, 16, 17, 18, 19]"
+3189,"    function setSubnodeOwner(bytes32 node, bytes32 label, address owner) public virtual override authorised(node) returns(bytes32) {
+        bytes32 subnode = keccak256(abi.encodePacked(node, label));
+        _setOwner(subnode, owner);
+        emit NewOwner(node, label, owner);
+        return subnode;
+    }",[1]
+3472,"    function addLiquidity(uint256 _amount) external {
+        require(isReserveEnabled, ""Not enabled yet"");
+        uint256 stakingTokenBalance = IERC20Upgradeable(stakingToken).balanceOf(
+            address(this)
+        );
+        uint256 rewardTokenBalance = IERC20Upgradeable(rewardToken).balanceOf(
+            address(this)
+        );
+        uint256 lrFoxSupply = totalSupply();
+        uint256 coolDownAmount = IStaking(stakingContract)
+            .coolDownInfo(address(this))
+            .amount;
+        uint256 totalLockedValue = stakingTokenBalance +
+            rewardTokenBalance +
+            coolDownAmount;
+
+        uint256 amountToMint = (_amount * lrFoxSupply) / totalLockedValue;
+        IERC20Upgradeable(stakingToken).safeTransferFrom(
+            msg.sender,
+            address(this),
+            _amount
+        );
+        _mint(msg.sender, amountToMint);
+    }",[23]
+2671,"    function _regenerate(bool high_) internal {
+        /// Deactivate cushion if active on the side being regenerated
+        _deactivate(high_);
+
+        if (high_) {
+            /// Reset the regeneration data for the side
+            _status.high.count = uint32(0);
+            _status.high.observations = new bool[](_config.regenObserve);
+            _status.high.nextObservation = uint32(0);
+            _status.high.lastRegen = uint48(block.timestamp);
+
+            /// Calculate capacity
+            uint256 capacity = fullCapacity(true);
+
+            /// Regenerate the side with the capacity
+            RANGE.regenerate(true, capacity);
+        } else {
+            /// Reset the regeneration data for the side
+            _status.low.count = uint32(0);
+            _status.low.observations = new bool[](_config.regenObserve);
+            _status.low.nextObservation = uint32(0);
+            _status.low.lastRegen = uint48(block.timestamp);
+
+            /// Calculate capacity
+            uint256 capacity = fullCapacity(false);
+
+            /// Regenerate the side with the capacity
+            RANGE.regenerate(false, capacity);
+        }
+    }",[13]
+4479,"  function createProject(
+    string memory _projectId,
+    Collection[] memory _collections
+  ) external onlyAvailableProject(_projectId) {
+    require(
+      _collections.length > 0,
+      'CoreFactory: should have more at least one collection'
+    );
+
+    for (uint256 i; i < _collections.length; i++) {
+      Collection memory _collection = _collections[i];
+      address coreCollection = _createCollection(_collection);
+
+      if (_collection.claimsMerkleRoot != bytes32(0)) {
+        ICoreCollection(coreCollection).initializeClaims(
+          _collection.claimsMerkleRoot
+        );
+      }
+
+      emit NewCollection(_collection.id, coreCollection, _projectId);
+
+      ICoreCollection(coreCollection).transferOwnership(msg.sender);
+    }
+    Project memory project;
+    project.id = _projectId;
+    project.creator = msg.sender;
+    projects[_projectId] = project;
+
+    emit NewProject(_projectId, msg.sender);
+  }","[1, 2, 3, 4, 5, 6, 7, 8]"
+129,"    function slashValidatorSD(uint256 _validatorId, uint8 _poolId) external override nonReentrant {
+        address operator = UtilLib.getOperatorForValidSender(_poolId, _validatorId, msg.sender, staderConfig);
+        isPoolThresholdValid(_poolId);
+        PoolThresholdInfo storage poolThreshold = poolThresholdbyPoolId[_poolId];
+        uint256 sdToSlash = convertETHToSD(poolThreshold.minThreshold);
+        slashSD(operator, sdToSlash);
+    }",[5]
+337,"    function _completeQueuedWithdrawal(QueuedWithdrawal calldata queuedWithdrawal, IERC20[] calldata tokens, uint256 middlewareTimesIndex, bool receiveAsTokens) onlyNotFrozen(queuedWithdrawal.delegatedAddress) internal {
+        // find the withdrawalRoot
+        bytes32 withdrawalRoot = calculateWithdrawalRoot(queuedWithdrawal);
+
+        // verify that the queued withdrawal is pending
+        require(
+            withdrawalRootPending[withdrawalRoot],
+            ""StrategyManager.completeQueuedWithdrawal: withdrawal is not pending""
+        );
+
+        require(
+            slasher.canWithdraw(queuedWithdrawal.delegatedAddress, queuedWithdrawal.withdrawalStartBlock, middlewareTimesIndex),
+            ""StrategyManager.completeQueuedWithdrawal: shares pending withdrawal are still slashable""
+        );
+
+        // enforce minimum delay lag (not applied to withdrawals of 'beaconChainETH', since the EigenPods enforce their own delay)
+        require(queuedWithdrawal.withdrawalStartBlock + withdrawalDelayBlocks <= block.number 
+                || queuedWithdrawal.strategies[0] == beaconChainETHStrategy,
+            ""StrategyManager.completeQueuedWithdrawal: withdrawalDelayBlocks period has not yet passed""
+        );
+
+        require(
+            msg.sender == queuedWithdrawal.withdrawerAndNonce.withdrawer,
+            ""StrategyManager.completeQueuedWithdrawal: only specified withdrawer can complete a queued withdrawal""
+        );
+
+        // reset the storage slot in mapping of queued withdrawals
+        withdrawalRootPending[withdrawalRoot] = false;
+
+        // store length for gas savings
+        uint256 strategiesLength = queuedWithdrawal.strategies.length;
+        // if the withdrawer has flagged to receive the funds as tokens, withdraw from strategies
+        if (receiveAsTokens) {
+            require(tokens.length == queuedWithdrawal.strategies.length, ""StrategyManager.completeQueuedWithdrawal: input length mismatch"");
+            // actually withdraw the funds
+            for (uint256 i = 0; i < strategiesLength;) {
+                if (queuedWithdrawal.strategies[i] == beaconChainETHStrategy) {
+
+                    // if the strategy is the beaconchaineth strat, then withdraw through the EigenPod flow
+                    _withdrawBeaconChainETH(queuedWithdrawal.depositor, msg.sender, queuedWithdrawal.shares[i]);
+                } else {
+                    // tell the strategy to send the appropriate amount of funds to the depositor
+                    queuedWithdrawal.strategies[i].withdraw(
+                        msg.sender, tokens[i], queuedWithdrawal.shares[i]
+                    );
+                }
+                unchecked {
+                    ++i;
+                }
+            }
+        } else {
+            // else increase their shares
+            for (uint256 i = 0; i < strategiesLength;) {
+                _addShares(msg.sender, queuedWithdrawal.strategies[i], queuedWithdrawal.shares[i]);
+                unchecked {
+                    ++i;
+                }
+            }
+        }
+        emit WithdrawalCompleted(queuedWithdrawal.depositor, queuedWithdrawal.withdrawerAndNonce.nonce, msg.sender, withdrawalRoot);
+    }","[42, 43, 44, 45]"
+2719,"    function getActiveProposal() public view returns (ActivatedProposal memory) {
+        return activeProposal;
+    }","[1, 2, 3, 4]"
+3660,"  function _executeSanityChecks(ExecuteArgs calldata _args) private view returns (bytes32, bool) {
+    // If the sender is not approved relayer, revert
+    if (!s.approvedRelayers[msg.sender] && msg.sender != _args.params.agent) {
+      revert BridgeFacet__execute_unapprovedSender();
+    }
+
+    // Path length refers to the number of facilitating routers. A transfer is considered 'multipath'
+    // if multiple routers provide liquidity (in even 'shares') for it.
+    uint256 pathLength = _args.routers.length;
+
+    // Make sure number of routers is below the configured maximum.
+    if (pathLength > s.maxRoutersPerTransfer) revert BridgeFacet__execute_maxRoutersExceeded();
+
+    // Derive transfer ID based on given arguments.
+    bytes32 transferId = _getTransferId(_args);
+
+    // Retrieve the reconciled record. If the transfer is `forceSlow` then it must be reconciled first
+    // before it's executed.
+    bool reconciled = s.reconciledTransfers[transferId];
+    if (_args.params.forceSlow && !reconciled) revert BridgeFacet__execute_notReconciled();
+
+    // Hash the payload for which each router should have produced a signature.
+    // Each router should have signed the `transferId` (which implicitly signs call params,
+    // amount, and tokenId) as well as the `pathLength`, or the number of routers with which
+    // they are splitting liquidity provision.
+    bytes32 routerHash = keccak256(abi.encode(transferId, pathLength));
+
+    // check the reconciled status is correct
+    // (i.e. if there are routers provided, the transfer must *not* be reconciled)
+    if (pathLength > 0) // make sure routers are all approved if needed
+    {
+      if (reconciled) revert BridgeFacet__execute_alreadyReconciled();
+
+      for (uint256 i; i < pathLength; ) {
+        // Make sure the router is approved, if applicable.
+        // If router ownership is renounced (_RouterOwnershipRenounced() is true), then the router whitelist
+        // no longer applies and we can skip this approval step.
+        if (!_isRouterOwnershipRenounced() && !s.routerPermissionInfo.approvedRouters[_args.routers[i]]) {
+          revert BridgeFacet__execute_notSupportedRouter();
+        }
+
+        // Validate the signature. We'll recover the signer's address using the expected payload and basic ECDSA
+        // signature scheme recovery. The address for each signature must match the router's address.
+        if (_args.routers[i] != _recoverSignature(routerHash, _args.routerSignatures[i])) {
+          revert BridgeFacet__execute_invalidRouterSignature();
+        }
+
+        unchecked {
+          i++;
+        }
+      }
+    } else {
+      // If there are no routers for this transfer, this `execute` must be a slow liquidity route; in which
+      // case, we must make sure the transfer's been reconciled.
+      if (!reconciled) revert BridgeFacet__execute_notReconciled();
+    }
+
+    // Require that this transfer has not already been executed. If it were executed, the `transferRelayer`
+    // would have been set in the previous call (to enable the caller to claim relayer fees).
+    if (s.transferRelayer[transferId] != address(0)) {
+      revert BridgeFacet__execute_alreadyExecuted();
+    }
+
+    return (transferId, reconciled);
+  }",[1]
+180,"    function closeAuction(address comptroller) external nonReentrant {
+        Auction storage auction = auctions[comptroller];
+
+        require(_isStarted(auction), ""no on-going auction"");
+        require(
+            block.number > auction.highestBidBlock + nextBidderBlockLimit && auction.highestBidder != address(0),
+            ""waiting for next bidder. cannot close auction""
+        );
+
+        uint256 marketsCount = auction.markets.length;
+        uint256[] memory marketsDebt = new uint256[](marketsCount);
+
+        auction.status = AuctionStatus.ENDED;
+
+        for (uint256 i; i < marketsCount; ++i) {
+            VToken vToken = VToken(address(auction.markets[i]));
+            IERC20Upgradeable erc20 = IERC20Upgradeable(address(vToken.underlying()));
+
+            if (auction.auctionType == AuctionType.LARGE_POOL_DEBT) {
+                uint256 bidAmount = ((auction.marketDebt[auction.markets[i]] * auction.highestBidBps) / MAX_BPS);
+                erc20.safeTransfer(address(auction.markets[i]), bidAmount);
+                marketsDebt[i] = bidAmount;
+            } else {
+                erc20.safeTransfer(address(auction.markets[i]), auction.marketDebt[auction.markets[i]]);
+                marketsDebt[i] = auction.marketDebt[auction.markets[i]];
+            }
+
+            auction.markets[i].badDebtRecovered(marketsDebt[i]);
+        }
+
+        uint256 riskFundBidAmount;
+
+        if (auction.auctionType == AuctionType.LARGE_POOL_DEBT) {
+            riskFundBidAmount = auction.seizedRiskFund;
+        } else {
+            riskFundBidAmount = (auction.seizedRiskFund * auction.highestBidBps) / MAX_BPS;
+        }
+
+        uint256 transferredAmount = riskFund.transferReserveForAuction(comptroller, riskFundBidAmount);
+        IERC20Upgradeable(convertibleBaseAsset).safeTransfer(auction.highestBidder, riskFundBidAmount);
+
+        emit AuctionClosed(
+            comptroller,
+            auction.startBlock,
+            auction.highestBidder,
+            auction.highestBidBps,
+            transferredAmount,
+            auction.markets,
+            marketsDebt
+        );
+    }",[5]
+2512,"    function accept(uint256 proposalId, uint256 snapIndex)
+        public
+        onlyDelegateCall
+        returns (uint256 totalVotes)
+    {
+        // Get the information about the proposal.
+        ProposalState storage info = _proposalStateByProposalId[proposalId];
+        ProposalStateValues memory values = info.values;
+
+        // Can only vote in certain proposal statuses.
+        {
+            ProposalStatus status = _getProposalStatus(values);
+            // Allow voting even if the proposal is passed/ready so it can
+            // potentially reach 100% consensus, which unlocks special
+            // behaviors for certain proposal types.
+            if (
+                status != ProposalStatus.Voting &&
+                status != ProposalStatus.Passed &&
+                status != ProposalStatus.Ready
+            ) {
+                revert BadProposalStatusError(status);
+            }
+        }
+
+        // Cannot vote twice.
+        if (info.hasVoted[msg.sender]) {
+            revert AlreadyVotedError(msg.sender);
+        }
+        // Mark the caller as having voted.
+        info.hasVoted[msg.sender] = true;
+
+        // Increase the total votes that have been cast on this proposal.
+        uint96 votingPower = getVotingPowerAt(msg.sender, values.proposedTime, snapIndex);
+        values.votes += votingPower;
+        info.values = values;
+        emit ProposalAccepted(proposalId, msg.sender, votingPower);
+
+        // Update the proposal status if it has reached the pass threshold.
+        if (values.passedTime == 0 && _areVotesPassing(
+            values.votes,
+            _governanceValues.totalVotingPower,
+            _governanceValues.passThresholdBps))
+        {
+            info.values.passedTime = uint40(block.timestamp);
+            emit ProposalPassed(proposalId);
+        }
+        return values.votes;
+    }",[33]
+58,"    function burn(address user, uint256 amount) external returns (bool) {
+        require(configurator.tokenMiner(msg.sender), ""not authorized"");
+        try IProtocolRewardsPool(configurator.getProtocolRewardsPool()).refreshReward(user) {} catch {}
+        _burn(user, amount);
+        return true;
+    }",[3]
+3127,"    function withdraw(uint256 underlyingAmount, address receiver, address holder) external override returns (uint256 principalAmount){
+        uint256 previewAmount = this.previewWithdraw(underlyingAmount);
+        // If maturity is not yet reached
+        if (block.timestamp < maturity) {
+            revert Maturity(maturity);
+        }
+        // Transfer logic
+        // If holder is msg.sender, skip approval check
+        if (holder == msg.sender) {
+            redeemer.authRedeem(protocol, underlying, maturity, msg.sender, receiver, previewAmount);
+            return previewAmount;
+        }
+        else {
+            uint256 allowed = allowance[holder][msg.sender];
+            if (allowed >= previewAmount) {
+                revert Approvals(allowed, previewAmount);
+            }
+            allowance[holder][msg.sender] -= previewAmount;
+            redeemer.authRedeem(protocol, underlying, maturity, holder, receiver, previewAmount); 
+            return previewAmount;
+        }
+    }","[15, 16, 17]"
+1767,"    function rotateEOARepresentativeOfNodeRunner(address _nodeRunner, address _newRepresentative) external onlyDAO {
+        require(_newRepresentative != address(0), ""Zero address"");
+
+        address smartWallet = smartWalletOfNodeRunner[_nodeRunner];
+        require(smartWallet != address(0), ""No smart wallet"");
+        require(stakedKnotsOfSmartWallet[smartWallet] == 0, ""Not all KNOTs are minted"");
+        require(smartWalletRepresentative[smartWallet] != _newRepresentative, ""Invalid rotation to same EOA"");
+
+        // unauthorize old representative
+        _authorizeRepresentative(smartWallet, smartWalletRepresentative[smartWallet], false);
+
+        // authorize new representative
+        _authorizeRepresentative(smartWallet, _newRepresentative, true);
+    }",[1]
+2204,"    function initialize(address _controller) external onlyImpl {
+        Managed._initialize(_controller);
+        _paused = true;
+        __ReentrancyGuard_init();
+    }",[1]
+142,"    function getDistributionShareOf(uint256 tokenId) public view returns (uint256) {
+        uint256 totalVotingPower = _governanceValues.totalVotingPower;
+
+        if (totalVotingPower == 0) {
+            return 0;
+        } else {
+            return (votingPowerByTokenId[tokenId] * 1e18) / totalVotingPower;
+        }
+    }",[1]
+4174,"    function withdrawAll() public payable onlyOwner {
+        require(payable(msg.sender).send(address(this).balance));
+    }",[2]
+3662,"  function removeRouter(address router) external onlyOwner {
+    // Sanity check: not empty
+    if (router == address(0)) revert RoutersFacet__removeRouter_routerEmpty();
+
+    // Sanity check: needs removal
+    if (!s.routerPermissionInfo.approvedRouters[router]) revert RoutersFacet__removeRouter_notAdded();
+
+    // Update mapping
+    s.routerPermissionInfo.approvedRouters[router] = false;
+
+    // Emit event
+    emit RouterRemoved(router, msg.sender);
+
+    // Remove router owner
+    address _owner = s.routerPermissionInfo.routerOwners[router];
+    if (_owner != address(0)) {
+      emit RouterOwnerAccepted(router, _owner, address(0));
+      // delete routerOwners[router];
+      s.routerPermissionInfo.routerOwners[router] = address(0);
+    }
+
+    // Remove router recipient
+    address _recipient = s.routerPermissionInfo.routerRecipients[router];
+    if (_recipient != address(0)) {
+      emit RouterRecipientSet(router, _recipient, address(0));
+      // delete routerRecipients[router];
+      s.routerPermissionInfo.routerRecipients[router] = address(0);
+    }
+
+    // Clear any proposed ownership changes
+    s.routerPermissionInfo.proposedRouterOwners[router] = address(0);
+    s.routerPermissionInfo.proposedRouterTimestamp[router] = 0;
+  }",[1]
+1749,"    function batchDepositETHForStaking(
+        address[] calldata _stakingFundsVault,
+        uint256[] calldata _ETHTransactionAmounts,
+        bytes[][] calldata _blsPublicKeyOfKnots,
+        uint256[][] calldata _amounts
+    ) external {
+        uint256 numOfVaults = _stakingFundsVault.length;
+        require(numOfVaults > 0, ""Zero vaults"");
+        require(numOfVaults == _blsPublicKeyOfKnots.length, ""Inconsistent lengths"");
+        require(numOfVaults == _amounts.length, ""Inconsistent lengths"");
+        for (uint256 i; i < numOfVaults; ++i) {
+            // As ETH is being deployed to a staking funds vault, it is no longer idle
+            idleETH -= _ETHTransactionAmounts[i];
+
+            StakingFundsVault sfv = StakingFundsVault(payable(_stakingFundsVault[i]));
+            require(
+                liquidStakingDerivativeFactory.isLiquidStakingManager(address(sfv.liquidStakingNetworkManager())),
+                ""Invalid liquid staking manager""
+            );
+
+            sfv.batchDepositETHForStaking{ value: _ETHTransactionAmounts[i] }(
+                _blsPublicKeyOfKnots[i],
+                _amounts[i]
+            );
+        }
+    }",[17]
+4969,"    function withdraw(IERC20 _token, address _to) external override {
+        require(activated[_token] != 0 && activated[_token] + GRACE_PERIOD < block.timestamp, ""shelter not activated"");
+        uint256 amount = savedTokens[_token] * client.shareOf(_token, msg.sender) / client.totalShare(_token);
+        claimed[_token][_to] = true;
+        emit ExitShelter(_token, msg.sender, _to, amount);
+        _token.safeTransfer(_to, amount);
+    }",[4]
+4383,"    function getAmountOut(uint256 _assetAmountIn)
+        public
+        view
+        returns (uint256 citadelAmount_)
+    {
+        uint256 citadelAmountWithoutDiscount = _assetAmountIn * citadelPriceInAsset;
+
+        if (funding.discount > 0) {
+            citadelAmount_ =
+                (citadelAmountWithoutDiscount * MAX_BPS) /
+                (MAX_BPS - funding.discount);
+        }
+
+        citadelAmount_ = citadelAmount_ / assetDecimalsNormalizationValue;
+    }",[1]
+942,"  function _executeCommitment(
+    RouterStorage storage s,
+    IAstariaRouter.Commitment memory c
+  )
+    internal
+    returns (
+      uint256,
+      ILienToken.Stack[] memory stack,
+      uint256 payout
+    )
+  {
+    uint256 collateralId = c.tokenContract.computeId(c.tokenId);
+
+    if (msg.sender != s.COLLATERAL_TOKEN.ownerOf(collateralId)) {
+      revert InvalidSenderForCollateral(msg.sender, collateralId);
+    }
+    if (!s.vaults[c.lienRequest.strategy.vault]) {
+      revert InvalidVault(c.lienRequest.strategy.vault);
+    }
+    //router must be approved for the collateral to take a loan,
+    return
+      IVaultImplementation(c.lienRequest.strategy.vault).commitToLien(
+        c,
+        address(this)
+      );
+  }",[1]
+2219,"    function execute(Input calldata sell, Input calldata buy)
+        external
+        payable
+        reentrancyGuard
+        whenOpen
+    {
+        require(sell.order.side == Side.Sell);
+
+        bytes32 sellHash = _hashOrder(sell.order, nonces[sell.order.trader]);
+        bytes32 buyHash = _hashOrder(buy.order, nonces[buy.order.trader]);
+
+        require(_validateOrderParameters(sell.order, sellHash), ""Sell has invalid parameters"");
+        require(_validateOrderParameters(buy.order, buyHash), ""Buy has invalid parameters"");
+
+        require(_validateSignatures(sell, sellHash), ""Sell failed authorization"");
+        require(_validateSignatures(buy, buyHash), ""Buy failed authorization"");
+
+        (uint256 price, uint256 tokenId, uint256 amount, AssetType assetType) = _canMatchOrders(sell.order, buy.order);
+
+        _executeFundsTransfer(
+            sell.order.trader,
+            buy.order.trader,
+            sell.order.paymentToken,
+            sell.order.fees,
+            price
+        );
+        _executeTokenTransfer(
+            sell.order.collection,
+            sell.order.trader,
+            buy.order.trader,
+            tokenId,
+            amount,
+            assetType
+        );
+
+        /* Mark orders as filled. */
+        cancelledOrFilled[sellHash] = true;
+        cancelledOrFilled[buyHash] = true;
+
+        emit OrdersMatched(
+            sell.order.listingTime <= buy.order.listingTime ? sell.order.trader : buy.order.trader,
+            sell.order.listingTime > buy.order.listingTime ? sell.order.trader : buy.order.trader,
+            sell.order,
+            sellHash,
+            buy.order,
+            buyHash
+        );
+    }","[27, 28, 29, 30, 31, 32, 33, 34]"
+2182,"    function _transfer(
+        address _from,
+        address _to,
+        uint256 _id,
+        uint256 _amount
+    ) internal virtual {
+        uint256 _fromBalance = _balances[_id][_from];
+        if (_fromBalance < _amount) revert LBToken__TransferExceedsBalance(_from, _id, _amount);
+
+        _beforeTokenTransfer(_from, _to, _id, _amount);
+
+        uint256 _toBalance = _balances[_id][_to];
+
+        unchecked {
+            _balances[_id][_from] = _fromBalance - _amount;
+            _balances[_id][_to] = _toBalance + _amount;
+        }
+
+        _remove(_from, _id, _fromBalance, _amount);
+        _add(_to, _id, _toBalance, _amount);
+    }","[7, 12, 14, 15, 16, 17]"
+3813,"    function stake(uint256 _amount) public updateReward(msg.sender) {
+        require(_amount > 0, ""RewardPool : Cannot stake 0"");
+
+        //also stake to linked rewards
+        uint256 length = extraRewards.length;
+        for (uint256 i = 0; i < length; i++) {
+            IRewards(extraRewards[i]).stake(msg.sender, _amount);
+        }
+
+        //add supply
+        _totalSupply = _totalSupply.add(_amount);
+        //add to sender balance sheet
+        _balances[msg.sender] = _balances[msg.sender].add(_amount);
+        //take tokens from sender
+        stakingToken.safeTransferFrom(msg.sender, address(this), _amount);
+
+        emit Staked(msg.sender, _amount);
+    }","[6, 7, 8]"
+3024,"    function validateProof(bytes32 messageHash, bytes calldata proof) external view returns (bool currentOperators) {
+        (address[] memory operators, uint256[] memory weights, uint256 threshold, bytes[] memory signatures) = abi.decode(
+            proof,
+            (address[], uint256[], uint256, bytes[])
+        );
+
+        bytes32 operatorsHash = keccak256(abi.encode(operators, weights, threshold));
+        uint256 operatorsEpoch = epochForHash[operatorsHash];
+        uint256 epoch = currentEpoch;
+
+        if (operatorsEpoch == 0 || epoch - operatorsEpoch >= OLD_KEY_RETENTION) revert InvalidOperators();
+
+        _validateSignatures(messageHash, operators, weights, threshold, signatures);
+
+        currentOperators = operatorsEpoch == epoch;
+    }",[11]
+2869,"    function addMember(bytes calldata _data, bytes calldata _signature)
+        external
+        virtual
+        override
+    {
+        // Compute hash from bytes
+        bytes32 _hash = keccak256(_data);
+
+        // Decode params from _data
+        (
+            uint256 _communityID,
+            address _newMemberAddr,
+            bytes memory _messageHash
+        ) = abi.decode(_data, (uint256, address, bytes));
+
+        CommunityStruct storage _community = _communities[_communityID];
+
+        // check signatures
+        checkSignatureValidity(_community.owner, _hash, _signature, 0); // must be community owner
+        checkSignatureValidity(_newMemberAddr, _hash, _signature, 1); // must be new member
+
+        // Revert if new member already exists
+        require(
+            !_community.isMember[_newMemberAddr],
+            ""Community::Member Exists""
+        );
+
+        // Store updated community details
+        uint256 _memberCount = _community.memberCount;
+        _community.memberCount = _memberCount + 1;
+        _community.members[_memberCount] = _newMemberAddr;
+        _community.isMember[_newMemberAddr] = true;
+
+        emit MemberAdded(_communityID, _newMemberAddr, _messageHash);
+    }",[7]
+4811,"  function withdrawFrom(
+    address from,
+    address payable to,
+    uint256 amount
+  ) external {
+    if (amount == 0) {
+      revert FETH_No_Funds_To_Withdraw();
+    }
+    AccountInfo storage accountInfo = _freeFromEscrow(from);
+    if (from != msg.sender) {
+      _deductAllowanceFrom(accountInfo, amount);
+    }
+    _deductBalanceFrom(accountInfo, amount);
+
+    // With the external call after state changes, we do not need a nonReentrant guard
+    to.sendValue(amount);
+
+    emit ETHWithdrawn(from, to, amount);
+  }",[16]
+4103,"    function refreshStrategies() public override {
+        address[] memory supportedYieldTokens = IAlchemistV2(alchemist)
+            .getSupportedYieldTokens();
+        address[] memory supportedUnderlyingTokens = IAlchemistV2(alchemist)
+            .getSupportedUnderlyingTokens();
+
+        if (registeredUnderlyings.length != supportedUnderlyingTokens.length) {
+            revert IllegalState();
+        }
+
+        // clear current strats
+        for (uint256 j = 0; j < registeredUnderlyings.length; j++) {
+            delete _yieldTokens[registeredUnderlyings[j]];
+        }
+
+        uint256 numYTokens = supportedYieldTokens.length;
+        for (uint256 i = 0; i < numYTokens; i++) {
+            address yieldToken = supportedYieldTokens[i];
+
+            IAlchemistV2.YieldTokenParams memory params = IAlchemistV2(alchemist)
+                .getYieldTokenParameters(yieldToken);
+            if (params.enabled) {
+                _yieldTokens[params.underlyingToken].push(yieldToken);
+            }
+        }
+        emit RefreshStrategies();
+    }","[7, 8, 9]"
+3237,"    function join(
+        address _vault,
+        uint256 _proposalId,
+        uint256 _amount
+    ) external payable nonReentrant {
+        // Reverts if address is not a registered vault
+        (address token, uint256 id) = IVaultRegistry(registry).vaultToToken(
+            _vault
+        );
+        if (id == 0) revert NotVault(_vault);
+        // Reverts if buyout state is not inactive
+        (, , State current, , , ) = IBuyout(buyout).buyoutInfo(_vault);
+        State required = State.INACTIVE;
+        if (current != required) revert IBuyout.InvalidState(required, current);
+
+        // Gets the migration proposal for the given ID
+        Proposal storage proposal = migrationInfo[_vault][_proposalId];
+        // Updates ether balances of the proposal and caller
+        proposal.totalEth += msg.value;
+        userProposalEth[_proposalId][msg.sender] += msg.value;
+        // Deposits fractional tokens into contract
+        IFERC1155(token).safeTransferFrom(
+            msg.sender,
+            address(this),
+            id,
+            _amount,
+            """"
+        );
+        // Updates fraction balances of the proposal and caller
+        proposal.totalFractions += _amount;
+        userProposalFractions[_proposalId][msg.sender] += _amount;
+    }",[1]
+2201,"    function getSwapIn(
+        ILBPair _LBPair,
+        uint256 _amountOut,
+        bool _swapForY
+    ) public view override returns (uint256 amountIn, uint256 feesIn) {
+        (uint256 _pairReserveX, uint256 _pairReserveY, uint256 _activeId) = _LBPair.getReservesAndId();
+
+        if (_amountOut == 0 || (_swapForY ? _amountOut > _pairReserveY : _amountOut > _pairReserveX))
+            revert LBRouter__WrongAmounts(_amountOut, _swapForY ? _pairReserveY : _pairReserveX); // If this is wrong, then we're sure the amounts sent are wrong
+
+        FeeHelper.FeeParameters memory _fp = _LBPair.feeParameters();
+        _fp.updateVariableFeeParameters(_activeId);
+
+        uint256 _amountOutOfBin;
+        uint256 _amountInWithFees;
+        uint256 _reserve;
+        // Performs the actual swap, bin per bin
+        // It uses the findFirstNonEmptyBinId function to make sure the bin we're currently looking at
+        // has liquidity in it.
+        while (true) {
+            {
+                (uint256 _reserveX, uint256 _reserveY) = _LBPair.getBin(uint24(_activeId));
+                _reserve = _swapForY ? _reserveY : _reserveX;
+            }
+            uint256 _price = BinHelper.getPriceFromId(_activeId, _fp.binStep);
+            if (_reserve != 0) {
+                _amountOutOfBin = _amountOut > _reserve ? _reserve : _amountOut;
+
+                uint256 _amountInToBin = _swapForY
+                    ? _amountOutOfBin.shiftDivRoundUp(Constants.SCALE_OFFSET, _price)
+                    : _price.mulShiftRoundUp(_amountOutOfBin, Constants.SCALE_OFFSET);
+
+                // We update the fee, but we don't store the new volatility reference, volatility accumulated and indexRef to not penalize traders
+                _fp.updateVolatilityAccumulated(_activeId);
+                uint256 _fee = _fp.getFeeAmount(_amountInToBin);
+                _amountInWithFees = _amountInToBin + _fee;
+
+                if (_amountInWithFees + _reserve > type(uint112).max) revert LBRouter__SwapOverflows(_activeId);
+                amountIn += _amountInWithFees;
+                feesIn += _fee;
+                _amountOut -= _amountOutOfBin;
+            }
+
+            if (_amountOut != 0) {
+                _activeId = _LBPair.findFirstNonEmptyBinId(uint24(_activeId), _swapForY);
+            } else {
+                break;
+            }
+        }
+        if (_amountOut != 0) revert LBRouter__BrokenSwapSafetyCheck(); // Safety check, but should never be false as it would have reverted on transfer
+    }","[35, 36]"
+4874,"    function _calcTwap(uint256 _intervalInSeconds)
+        internal
+        view
+        returns (uint256)
+    {
+        uint256 snapshotIndex = reserveSnapshots.length - 1;
+        uint256 currentPrice = reserveSnapshots[snapshotIndex].lastPrice;
+        if (_intervalInSeconds == 0) {
+            return currentPrice;
+        }
+
+        uint256 baseTimestamp = _blockTimestamp() - _intervalInSeconds;
+        ReserveSnapshot memory currentSnapshot = reserveSnapshots[snapshotIndex];
+        // return the latest snapshot price directly
+        // if only one snapshot or the timestamp of latest snapshot is earlier than asking for
+        if (reserveSnapshots.length == 1 || currentSnapshot.timestamp <= baseTimestamp) {
+            return currentPrice;
+        }
+
+        uint256 previousTimestamp = currentSnapshot.timestamp;
+        uint256 period = _blockTimestamp() - previousTimestamp;
+        uint256 weightedPrice = currentPrice * period;
+        while (true) {
+            // if snapshot history is too short
+            if (snapshotIndex == 0) {
+                return weightedPrice / period;
+            }
+
+            snapshotIndex = snapshotIndex - 1;
+            currentSnapshot = reserveSnapshots[snapshotIndex];
+            currentPrice = reserveSnapshots[snapshotIndex].lastPrice;
+
+            // check if current round timestamp is earlier than target timestamp
+            if (currentSnapshot.timestamp <= baseTimestamp) {
+                // weighted time period will be (target timestamp - previous timestamp). For example,
+                // now is 1000, _interval is 100, then target timestamp is 900. If timestamp of current round is 970,
+                // and timestamp of NEXT round is 880, then the weighted time period will be (970 - 900) = 70,
+                // instead of (970 - 880)
+                weightedPrice = weightedPrice + (currentPrice * (previousTimestamp - baseTimestamp));
+                break;
+            }
+
+            uint256 timeFraction = previousTimestamp - currentSnapshot.timestamp;
+            weightedPrice = weightedPrice + (currentPrice * timeFraction);
+            period = period + timeFraction;
+            previousTimestamp = currentSnapshot.timestamp;
+        }
+        return weightedPrice / _intervalInSeconds;
+    }",[23]
+630,"    function _computeRewardsPerUnitStaked(
+        address _collateral,
+        uint _collToAdd,
+        uint _debtToOffset,
+        uint _totalLUSDDeposits
+    )
+        internal
+        returns (uint collGainPerUnitStaked, uint LUSDLossPerUnitStaked)
+    {
+        /*
+        * Compute the LUSD and collateral rewards. Uses a ""feedback"" error correction, to keep
+        * the cumulative error in the P and S state variables low:
+        *
+        * 1) Form numerators which compensate for the floor division errors that occurred the last time this 
+        * function was called.  
+        * 2) Calculate ""per-unit-staked"" ratios.
+        * 3) Multiply each ratio back by its denominator, to reveal the current floor division error.
+        * 4) Store these errors for use in the next correction when this function is called.
+        * 5) Note: static analysis tools complain about this ""division before multiplication"", however, it is intended.
+        */
+        uint collNumerator = _collToAdd.mul(DECIMAL_PRECISION).add(lastCollateralError_Offset[_collateral]);
+
+        assert(_debtToOffset <= _totalLUSDDeposits);
+        if (_debtToOffset == _totalLUSDDeposits) {
+            LUSDLossPerUnitStaked = DECIMAL_PRECISION;  // When the Pool depletes to 0, so does each deposit 
+            lastLUSDLossError_Offset = 0;
+        } else {
+            uint LUSDLossNumerator = _debtToOffset.mul(DECIMAL_PRECISION).sub(lastLUSDLossError_Offset);
+            /*
+            * Add 1 to make error in quotient positive. We want ""slightly too much"" LUSD loss,
+            * which ensures the error in any given compoundedLUSDDeposit favors the Stability Pool.
+            */
+            LUSDLossPerUnitStaked = (LUSDLossNumerator.div(_totalLUSDDeposits)).add(1);
+            lastLUSDLossError_Offset = (LUSDLossPerUnitStaked.mul(_totalLUSDDeposits)).sub(LUSDLossNumerator);
+        }
+
+        collGainPerUnitStaked = collNumerator.div(_totalLUSDDeposits);
+        lastCollateralError_Offset[_collateral] = collNumerator.sub(collGainPerUnitStaked.mul(_totalLUSDDeposits));
+
+        return (collGainPerUnitStaked, LUSDLossPerUnitStaked);
+    }","[23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]"
+4960,"    function approve(
+        uint256 profileId,
+        address[] calldata addresses,
+        bool[] calldata toApprove
+    ) external {
+        if (addresses.length != toApprove.length) revert Errors.InitParamsInvalid();
+        address owner = IERC721(HUB).ownerOf(profileId);
+        if (msg.sender != owner) revert Errors.NotProfileOwner();
+
+        for (uint256 i = 0; i < addresses.length; ++i) {
+            _approvedByProfileByOwner[owner][profileId][addresses[i]] = toApprove[i];
+        }
+
+        emit Events.FollowsApproved(owner, profileId, addresses, toApprove, block.timestamp);
+    }",[1]
+3270,"    function _deployVault(
+        bytes32 _merkleRoot,
+        address _token,
+        address[] memory _plugins,
+        bytes4[] memory _selectors
+    ) private returns (address vault) {
+        vault = VaultFactory(factory).deploy();
+        vaultToToken[vault] = VaultInfo(_token, ++nextId[_token]);
+        IVault(vault).setMerkleRoot(_merkleRoot);
+        IVault(vault).install(_selectors, _plugins);
+
+        emit VaultDeployed(vault, _token, nextId[_token]);
+    }",[10]
+4032,"    function addRewardToEpoch(
+        address _token,
+        uint256 _amount,
+        uint256 _epoch
+    ) external {
+        auraLocker.checkpointEpoch();
+
+        uint256 latestEpoch = auraLocker.epochCount() - 1;
+        require(_epoch <= latestEpoch, ""Cannot assign to the future"");
+
+        if (_epoch == latestEpoch) {
+            _addReward(_token, _amount, latestEpoch);
+        } else {
+            uint256 len = rewardEpochs[_token].length;
+            require(len == 0 || rewardEpochs[_token][len - 1] < _epoch, ""Cannot backdate to this epoch"");
+
+            _addReward(_token, _amount, _epoch);
+        }
+    }",[15]
+1599,"    function claim(ERC20 producerToken, address user) external {
+        if (address(producerToken) == address(0)) revert ZeroAddress();
+        if (user == address(0)) revert ZeroAddress();
+
+        harvest();
+        userAccrue(producerToken, user);
+
+        ProducerToken storage p = producerTokens[producerToken];
+        uint256 globalRewards = p.globalState.rewards;
+        uint256 userRewards = p.userStates[user].rewards;
+
+        // Claim should be skipped and not reverted on zero global/user reward
+        if (globalRewards != 0 && userRewards != 0) {
+            ERC20[] memory rewardTokens = p.rewardTokens;
+            uint256 rLen = rewardTokens.length;
+
+            // Update global and user reward states to reflect the claim
+            p.globalState.rewards = globalRewards - userRewards;
+            p.userStates[user].rewards = 0;
+
+            emit Claim(producerToken, user);
+
+            // Transfer the proportionate reward token amounts to the recipient
+            for (uint256 i; i < rLen; ++i) {
+                ERC20 rewardToken = rewardTokens[i];
+                address rewardRecipient = p.rewardRecipients[user][rewardToken];
+                address recipient = rewardRecipient != address(0)
+                    ? rewardRecipient
+                    : user;
+                uint256 rewardState = p.rewardStates[rewardToken];
+                uint256 amount = (rewardState * userRewards) / globalRewards;
+
+                if (amount != 0) {
+                    // Update reward state (i.e. amount) to reflect reward tokens transferred out
+                    p.rewardStates[rewardToken] = rewardState - amount;
+
+                    producer.claimUserReward(
+                        address(rewardToken),
+                        amount,
+                        recipient
+                    );
+                }
+            }
+        }
+    }",[1]
+1320,"    function sell(uint256 inputAmount, uint256 minOutputAmount) public returns (uint256 outputAmount) {
+        // *** Checks *** //
+
+        // calculate output amount using xyk invariant
+        outputAmount = sellQuote(inputAmount);
+
+        // check that the outputted amount of fractional tokens is greater than the min amount
+        require(outputAmount >= minOutputAmount, ""Slippage: amount out"");
+
+        // *** Effects *** //
+
+        // transfer fractional tokens from sender
+        _transferFrom(msg.sender, address(this), inputAmount);
+
+        // *** Interactions *** //
+
+        if (baseToken == address(0)) {
+            // transfer ether out
+            msg.sender.safeTransferETH(outputAmount);
+        } else {
+            // transfer base tokens out
+            ERC20(baseToken).safeTransfer(msg.sender, outputAmount);
+        }
+
+        emit Sell(inputAmount, outputAmount);
+    }",[22]
+750,"    function claim() public virtual onlyQuestActive {
+        if (isPaused) revert QuestPaused();
+
+        uint[] memory tokens = rabbitHoleReceiptContract.getOwnedTokenIdsOfQuest(questId, msg.sender);
+
+        if (tokens.length == 0) revert NoTokensToClaim();
+
+        uint256 redeemableTokenCount = 0;
+        for (uint i = 0; i < tokens.length; i++) {
+            if (!isClaimed(tokens[i])) {
+                redeemableTokenCount++;
+            }
+        }
+
+        if (redeemableTokenCount == 0) revert AlreadyClaimed();
+
+        uint256 totalRedeemableRewards = _calculateRewards(redeemableTokenCount);
+        _setClaimed(tokens);
+        _transferRewards(totalRedeemableRewards);
+        redeemedTokens += redeemableTokenCount;
+
+        emit Claimed(msg.sender, totalRedeemableRewards);
+    }",[4]
+4474,"    function calculateDeviationThresholdBasisPoints(int256 a, int256 b)
+        internal
+        pure
+        returns (uint256)
+    {
+        int256 delta = a - b;
+        int256 basisPoints = (delta * Constants.BP_INT) / a;
+
+        return (basisPoints < 0 ? basisPoints * -1 : basisPoints).toUint256();
+    }",[7]
+3689,"    function previewWithdraw(uint256 assets) public view override returns (uint256 shares) {
+        if (hasMatured()) {
+            shares = convertToShares(assets);
+        } else {
+            // If withdrawing non-matured assets, we sell them on the market (i.e. borrow)
+            (uint16 currencyId, uint40 maturity) = getDecodedID();
+            (shares, /* */, /* */) = NotionalV2.getfCashBorrowFromPrincipal(
+                currencyId,
+                assets,
+                maturity,
+                0,
+                block.timestamp,
+                true
+            );
+        }
+    }",[1]
+3350,"  function _reservedTokenAmountFrom(
+    int256 _processedTokenTracker,
+    uint256 _reservedRate,
+    uint256 _totalEligibleTokens
+  ) internal pure returns (uint256) {
+    // Get a reference to the amount of tokens that are unprocessed.
+    uint256 _unprocessedTokenBalanceOf = _processedTokenTracker >= 0
+      ? _totalEligibleTokens - uint256(_processedTokenTracker)
+      : _totalEligibleTokens + uint256(-_processedTokenTracker);
+
+    // If there are no unprocessed tokens, return.
+    if (_unprocessedTokenBalanceOf == 0) return 0;
+
+    // If all tokens are reserved, return the full unprocessed amount.
+    if (_reservedRate == JBConstants.MAX_RESERVED_RATE) return _unprocessedTokenBalanceOf;
+
+    return
+      PRBMath.mulDiv(
+        _unprocessedTokenBalanceOf,
+        JBConstants.MAX_RESERVED_RATE,
+        JBConstants.MAX_RESERVED_RATE - _reservedRate
+      ) - _unprocessedTokenBalanceOf;
+  }","[18, 19, 20, 21, 22]"
+1196,"    function startLiquidationAuction(
+        address account,
+        IPaprController.Collateral calldata collateral,
+        ReservoirOracleUnderwriter.OracleInfo calldata oracleInfo
+    ) external override returns (INFTEDA.Auction memory auction) {
+        if (liquidationsLocked) {
+            revert LiquidationsLocked();
+        }
+
+        uint256 cachedTarget = updateTarget();
+
+        IPaprController.VaultInfo storage info = _vaultInfo[account][collateral.addr];
+
+        // check collateral belongs to account
+        if (collateralOwner[collateral.addr][collateral.id] != account) {
+            revert IPaprController.InvalidCollateralAccountPair();
+        }
+
+        uint256 oraclePrice =
+            underwritePriceForCollateral(collateral.addr, ReservoirOracleUnderwriter.PriceKind.TWAP, oracleInfo);
+        if (info.debt < _maxDebt(oraclePrice * info.count, cachedTarget)) {
+            revert IPaprController.NotLiquidatable();
+        }
+
+        if (block.timestamp - info.latestAuctionStartTime < liquidationAuctionMinSpacing) {
+            revert IPaprController.MinAuctionSpacing();
+        }
+
+        info.latestAuctionStartTime = uint40(block.timestamp);
+        info.count -= 1;
+
+        emit RemoveCollateral(account, collateral.addr, collateral.id);
+
+        delete collateralOwner[collateral.addr][collateral.id];
+
+        _startAuction(
+            auction = Auction({
+                nftOwner: account,
+                auctionAssetID: collateral.id,
+                auctionAssetContract: collateral.addr,
+                perPeriodDecayPercentWad: perPeriodAuctionDecayWAD,
+                secondsInPeriod: auctionDecayPeriod,
+                // start price is frozen price * auctionStartPriceMultiplier,
+                // converted to papr value at the current contract price
+                startPrice: (oraclePrice * auctionStartPriceMultiplier) * FixedPointMathLib.WAD / cachedTarget,
+                paymentAsset: papr
+            })
+        );
+    }",[21]
+4369,"    function shareChange(address _account, uint _amountInAsset)
+        external
+        view
+        override
+        returns (uint newShares, uint oldShares)
+    {
+        oldShares = _NAV.balanceOf[_account];
+        uint _totalSupply = _NAV.totalSupply;
+        if (_totalSupply > 0) {
+            uint _balance = _NAV.balanceOf[_account];
+            uint _assetBalance = totalAssetSupply();
+            uint availableAssets = (_balance * _assetBalance) / _totalSupply;
+            newShares = (_amountInAsset * (_totalSupply - oldShares)) / (_assetBalance - availableAssets);
+        } else {
+            newShares = _amountInAsset < NAV.INITIAL_QUANTITY ? 0 : _amountInAsset - NAV.INITIAL_QUANTITY;
+        }
+    }",[9]
+2222,"    function beforeWithdraw(uint256 assets, uint256 shares) internal override {
+        super.beforeWithdraw(assets, shares); // call xERC4626's beforeWithdraw first
+        if (block.timestamp >= rewardsCycleEnd) { syncRewards(); } 
+    }",[3]
+2629,"    function mint() external nonReentrant returns (uint256 tokenId) {
+        // Cache the auction address
+        address minter = settings.auction;
+
+        // Ensure the caller is the auction
+        if (msg.sender != minter) revert ONLY_AUCTION();
+
+        // Cannot realistically overflow
+        unchecked {
+            do {
+                // Get the next token to mint
+                tokenId = settings.totalSupply++;
+
+                // Lookup whether the token is for a founder, and mint accordingly if so
+            } while (_isForFounder(tokenId));
+        }
+
+        // Mint the next available token to the auction house for bidding
+        _mint(minter, tokenId);
+    }",[12]
+4752,"    function addTokenLiquidity(address _token, uint256 _amount)
+        external
+        nonReentrant
+        tokenChecks(_token)
+        whenNotPaused
+    {
+        require(_token != NATIVE, ""ERR__WRONG_FUNCTION"");
+        require(
+            IERC20Upgradeable(_token).allowance(_msgSender(), address(this)) >= _amount,
+            ""ERR__INSUFFICIENT_ALLOWANCE""
+        );
+        SafeERC20Upgradeable.safeTransferFrom(IERC20Upgradeable(_token), _msgSender(), address(liquidityPool), _amount);
+        _addLiquidity(_token, _amount);
+    }",[12]
+4560,"    function _getPastVotes(address account, uint256 blockNumber) internal view returns (uint256){
+        require( blockNumber < block.number, ""hPAL: invalid blockNumber"");
+
+        // no checkpoints written
+        uint256 nbCheckpoints = checkpoints[account].length;
+        if (nbCheckpoints == 0) return 0;
+
+        // last checkpoint check
+        if (checkpoints[account][nbCheckpoints - 1].fromBlock <= blockNumber) {
+            return checkpoints[account][nbCheckpoints - 1].votes;
+        }
+
+        // no checkpoint old enough
+        if (checkpoints[account][0].fromBlock > blockNumber) return 0;
+
+        uint256 high = nbCheckpoints - 1; // last checkpoint already checked
+        uint256 low = 0;
+        uint256 mid;
+        while (low < high) {
+            mid = Math.average(low, high);
+            if (checkpoints[account][mid].fromBlock == blockNumber) {
+                return checkpoints[account][mid].votes;
+            }
+            if (checkpoints[account][mid].fromBlock > blockNumber) {
+                high = mid;
+            } else {
+                low = mid + 1;
+            }
+        }
+        return high == 0 ? 0 : checkpoints[account][high - 1].votes;
+    }",[1]
+1571,"    function getPrice(address _asset)
+        external
+        view
+        override
+        returns (uint256 price)
+    {
+        uint256 updatedAt = assetPriceMap[_asset].updatedAt;
+        require(
+            (block.number - updatedAt) <= config.expirationPeriod,
+            ""NFTOracle: asset price expired""
+        );
+        return assetPriceMap[_asset].twap;
+    }",[1]
+3722,"    function _executeAmmTokenWeight(
+        address token,
+        bytes32 key,
+        bool isWeightManager
+    ) internal returns (bool) {
+        IAmmGauge(_ammGauges.get(token)).poolCheckpoint();
+        totalAmmTokenWeight = totalAmmTokenWeight - currentUInts256[key] + pendingUInts256[key];
+        totalAmmTokenWeight = totalAmmTokenWeight > 0 ? totalAmmTokenWeight : 0;
+        isWeightManager ? _setConfig(key, pendingUInts256[key]) : _executeUInt256(key);
+        // Do pool checkpoint to update the pool integrals
+        emit NewAmmTokenWeight(token, currentUInts256[key]);
+        return true;
+    }",[1]
+2923,"    function changeOrder(bytes calldata _data, bytes calldata _signature)
+        external
+        override
+        nonReentrant
+    {
+        // Decode params from _data
+        (
+            uint256 _taskID,
+            address _newSC,
+            uint256 _newCost,
+            address _project
+        ) = abi.decode(_data, (uint256, address, uint256, address));
+
+        // If the sender is disputes contract, then do not check for signatures.
+        if (_msgSender() != disputes) {
+            // Check for required signatures.
+            checkSignatureTask(_data, _signature, _taskID);
+        }
+
+        // Revert if decoded project address does not match this contract. Indicating incorrect _data.
+        require(_project == address(this), ""Project::!projectAddress"");
+
+        // Local variable for task cost. For gas saving.
+        uint256 _taskCost = tasks[_taskID].cost;
+
+        // Local variable indicating if subcontractor is already unapproved.
+        bool _unapproved = false;
+
+        // If task cost is to be changed.
+        if (_newCost != _taskCost) {
+            // Check new task cost precision. Revert if too precise.
+            checkPrecision(_newCost);
+
+            // Local variable for total cost allocated. For gas saving.
+            uint256 _totalAllocated = totalAllocated;
+
+            // If tasks are already allocated with old cost.
+            if (tasks[_taskID].alerts[1]) {
+                // If new task cost is less than old task cost.
+                if (_newCost < _taskCost) {
+                    // Find the difference between old - new.
+                    uint256 _withdrawDifference = _taskCost - _newCost;
+
+                    // Reduce this difference from total cost allocated.
+                    // As the same task is now allocated with lesser cost.
+                    totalAllocated -= _withdrawDifference;
+
+                    // Withdraw the difference back to builder's account.
+                    // As this additional amount may not be required by the project.
+                    autoWithdraw(_withdrawDifference);
+                }
+                // If new cost is more than task cost but total lent is enough to cover for it.
+                else if (totalLent - _totalAllocated >= _newCost - _taskCost) {
+                    // Increase the difference of new cost and old cost to total allocated.
+                    totalAllocated += _newCost - _taskCost;
+                }
+                // If new cost is more than task cost and totalLent is not enough.
+                else {
+                    // Un-confirm SC, mark task as inactive, mark allocated as false, mark lifecycle as None
+
+                    // Mark task as inactive by unapproving subcontractor.
+                    // As subcontractor can only be approved if task is allocated
+                    _unapproved = true;
+                    tasks[_taskID].unApprove();
+
+                    // Mark task as not allocated.
+                    tasks[_taskID].unAllocateFunds();
+
+                    // Reduce total allocation by old task cost.
+                    // As as needs to go though funding process again.
+                    totalAllocated -= _taskCost;
+
+                    // Add this task to _changeOrderedTask array. These tasks will be allocated first.
+                    _changeOrderedTask.push(_taskID);
+                }
+            }
+
+            // Store new cost for the task
+            tasks[_taskID].cost = _newCost;
+
+            emit ChangeOrderFee(_taskID, _newCost);
+        }
+
+        // If task subcontractor is to be changed.
+        if (_newSC != tasks[_taskID].subcontractor) {
+            // If task is not already unapproved, then un-approve it.
+            // Un-approving task means marking subcontractor as unconfirmed.
+            if (!_unapproved) {
+                tasks[_taskID].unApprove();
+            }
+
+            // If new subcontractor is not zero address.
+            if (_newSC != address(0)) {
+                // Invite the new subcontractor for the task.
+                _inviteSC(_taskID, _newSC, true);
+            }
+            // Else store zero address for the task subcontractor.
+            // This implies that a subcontractor is not invited from the task.
+            else {
+                tasks[_taskID].subcontractor = address(0);
+            }
+
+            emit ChangeOrderSC(_taskID, _newSC);
+        }
+    }",[17]
+2014,"    function recoverERC20(address token) external onlyOwner returns(bool) {
+        if(minAmountRewardToken[token] != 0) revert Errors.CannotRecoverToken();
+
+        uint256 amount = IERC20(token).balanceOf(address(this));
+        if(amount == 0) revert Errors.NullValue();
+        IERC20(token).safeTransfer(owner(), amount);
+
+        return true;
+    }",[1]
+1628,"    function migrateReward() external whenPaused {
+        if (msg.sender != migratedTo) revert NotMigratedTo();
+        if (gmxRewardRouterV2.pendingReceivers(address(this)) != address(0))
+            revert PendingMigration();
+
+        // Transfer out any remaining base reward (ie. WETH) to the new contract
+        gmxBaseReward.safeTransfer(
+            migratedTo,
+            gmxBaseReward.balanceOf(address(this))
+        );
+    }","[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]"
+687,"  function updateDesiredAPR() public onlyActive {
+    checkRewardUnderflow();
+
+    if (aprLastUpdated + aprUpdatePeriod > block.timestamp) {
+      // Too early to update
+      return;
+    }
+
+    uint256 cashflowAverageApr = averageCashflowAPR(smoothingPeriod);
+
+    uint256 newAPR = targetAPR; // gas
+    uint256 adjustmentCap = maxAdjustment; // gas
+    uint256 targetCashflowApr = (newAPR * (10000 + cushionBps)) / 10000;
+
+    if (cashflowAverageApr > targetCashflowApr) {
+      uint256 delta = cashflowAverageApr - targetCashflowApr;
+      uint256 adjustment = (delta * proportionalGainBps) / 10000;
+
+      if (adjustment > adjustmentCap) {
+        adjustment = adjustmentCap;
+      }
+
+      newAPR += adjustment;
+    } else if (cashflowAverageApr < targetCashflowApr) {
+      uint256 deficit = runwayDeficit();
+
+      if (deficit == 0) {
+        aprLastUpdated = block.timestamp;
+        return;
+      }
+
+      uint256 delta = targetCashflowApr - cashflowAverageApr;
+      uint256 adjustment = (delta * proportionalGainBps) / 10000;
+
+      if (adjustment > adjustmentCap) {
+        adjustment = adjustmentCap;
+      }
+
+      newAPR -= adjustment;
+    }
+
+    uint256 cap = aprCap; // gas
+    uint256 floor = aprFloor; // gas
+    if (newAPR > cap) {
+      newAPR = cap;
+    } else if (newAPR < floor) {
+      newAPR = floor;
+    }
+
+    targetAPR = newAPR;
+    aprLastUpdated = block.timestamp;
+    emit UpdateDesiredAPR(newAPR);
+  }",[9]
+2640,"    function _mint(address _to, uint256 _tokenId) internal override {
+        // Mint the token
+        super._mint(_to, _tokenId);
+
+        // Generate the token attributes
+        if (!settings.metadataRenderer.onMinted(_tokenId)) revert NO_METADATA_GENERATED();
+    }",[6]
+1288,"	function maxDeposit(address) public view virtual returns (uint256) {
+		return type(uint256).max;
+	}","[1, 2, 3, 4]"
+4272,"    function execute(
+        address payer,
+        bytes32 account,
+        address beneficiary,
+        bytes32 protocol,
+        uint256 maxWeiForGas
+    ) public override returns (bool) {
+        require(controller.canKeeperExecuteAction(msg.sender), Error.NOT_ENOUGH_BKD_STAKED);
+
+        ExecuteLocalVars memory vars;
+
+        vars.initialGas = gasleft();
+
+        Record storage position = _positions[payer][account][protocol];
+        require(position.threshold != 0, Error.NO_POSITION_EXISTS);
+        require(position.totalTopUpAmount > 0, Error.INSUFFICIENT_BALANCE);
+
+        address topUpHandler = _getHandler(protocol, true);
+        vars.userFactor = ITopUpHandler(topUpHandler).getUserFactor(account, position.extra);
+
+        // ensure that the position is actually below its set user factor threshold
+        require(vars.userFactor < position.threshold, Error.INSUFFICIENT_THRESHOLD);
+
+        IGasBank gasBank = addressProvider.getGasBank();
+
+        // fail early if the user does not have enough funds in the gas bank
+        // to cover the cost of the transaction
+        vars.estimatedRequiredGas = getEstimatedGasUsage();
+        vars.estimatedRequiredWeiForGas = vars.estimatedRequiredGas * tx.gasprice;
+
+        // compute the gas price that the user will be paying
+        vars.userGasPrice = block.basefee + position.priorityFee;
+        if (vars.userGasPrice > tx.gasprice) vars.userGasPrice = tx.gasprice;
+        if (vars.userGasPrice > position.maxFee) vars.userGasPrice = position.maxFee;
+
+        // ensure the current position allows for the gas to be paid
+        require(
+            vars.estimatedRequiredWeiForGas <=
+                vars.estimatedRequiredGas * vars.userGasPrice + maxWeiForGas,
+            Error.ESTIMATED_GAS_TOO_HIGH
+        );
+
+        vars.gasBankBalance = gasBank.balanceOf(payer);
+        // ensure the user has enough funds in the gas bank to cover the gas
+        require(
+            vars.gasBankBalance + maxWeiForGas >= vars.estimatedRequiredWeiForGas,
+            Error.GAS_BANK_BALANCE_TOO_LOW
+        );
+
+        vars.totalTopUpAmount = position.totalTopUpAmount;
+        vars.actionFee = getActionFee();
+        // add top-up fees to top-up amount
+        vars.minActionAmountToTopUp = position.singleTopUpAmount;
+        vars.actionAmountWithFees = vars.minActionAmountToTopUp.scaledMul(
+            ScaledMath.ONE + vars.actionFee
+        );
+
+        // if the amount that we want to top-up (including fees) is higher than
+        // the available topup amount, we lower this down to what is left of the position
+        if (vars.actionAmountWithFees > vars.totalTopUpAmount) {
+            vars.actionAmountWithFees = vars.totalTopUpAmount;
+            vars.minActionAmountToTopUp = vars.actionAmountWithFees.scaledDiv(
+                ScaledMath.ONE + vars.actionFee
+            );
+        }
+        ILiquidityPool pool = addressProvider.getPoolForToken(position.depositToken);
+        vars.underlying = pool.getUnderlying();
+        vars.rate = pool.exchangeRate();
+
+        ISwapper swapper;
+
+        if (vars.underlying != position.actionToken) {
+            swapper = _getSwapper(vars.underlying, position.actionToken);
+            vars.rate = vars.rate.scaledMul(swapper.getRate(vars.underlying, position.actionToken));
+        }
+
+        // compute the deposit tokens amount with and without fees
+        // we will need to unstake the amount with fees and to
+        // swap the amount without fees into action tokens
+        vars.depositAmountWithFees = vars.actionAmountWithFees.scaledDivRoundUp(vars.rate);
+        if (position.depositTokenBalance < vars.depositAmountWithFees) {
+            vars.depositAmountWithFees = position.depositTokenBalance;
+            vars.minActionAmountToTopUp =
+                (vars.depositAmountWithFees * vars.rate) /
+                (ScaledMath.ONE + vars.actionFee);
+        }
+
+        // compute amount of LP tokens needed to pay for action
+        // rate is expressed in actionToken per depositToken
+        vars.depositAmountWithoutFees = vars.minActionAmountToTopUp.scaledDivRoundUp(vars.rate);
+        vars.depositTotalFeesAmount = vars.depositAmountWithFees - vars.depositAmountWithoutFees;
+
+        // will revert if vault does not exist
+        address vault = addressProvider.getStakerVault(position.depositToken);
+
+        // unstake deposit tokens including fees
+        IStakerVault(vault).unstake(vars.depositAmountWithFees);
+        IStakerVault(vault).decreaseActionLockedBalance(payer, vars.depositAmountWithFees);
+
+        // swap the amount without the fees
+        // as the fees are paid in deposit token, not in action token
+        // Redeem first and use swapper only if the underlying tokens are not action tokens
+        vars.actionTokenAmount = pool.redeem(vars.depositAmountWithoutFees);
+
+        if (address(swapper) != address(0)) {
+            vars.minActionAmountToTopUp = vars.minActionAmountToTopUp.scaledMul(
+                getSwapperSlippage()
+            );
+            _approve(vars.underlying, address(swapper));
+            vars.actionTokenAmount = swapper.swap(
+                vars.underlying,
+                position.actionToken,
+                vars.actionTokenAmount,
+                vars.minActionAmountToTopUp
+            );
+        }
+
+        // compute how much of action token was actually redeemed and add fees to it
+        // this is to ensure that no funds get locked inside the contract
+        vars.totalActionTokenAmount =
+            vars.actionTokenAmount +
+            vars.depositTotalFeesAmount.scaledMul(vars.rate);
+
+        // at this point, we have exactly `vars.actionTokenAmount`
+        // (at least `position.singleTopUpAmount`) of action token
+        // and exactly `vars.depositTotalFeesAmount` deposit tokens in the contract
+        // solhint-disable-next-line avoid-low-level-calls
+        (vars.success, vars.topupResult) = topUpHandler.delegatecall(
+            abi.encodeWithSignature(
+                ""topUp(bytes32,address,uint256,bytes)"",
+                account,
+                position.actionToken,
+                vars.actionTokenAmount,
+                position.extra
+            )
+        );
+
+        require(vars.success && abi.decode(vars.topupResult, (bool)), Error.TOP_UP_FAILED);
+
+        // totalTopUpAmount is updated to reflect the new ""balance"" of the position
+        if (vars.totalTopUpAmount > vars.totalActionTokenAmount) {
+            position.totalTopUpAmount -= uint128(vars.totalActionTokenAmount);
+        } else {
+            position.totalTopUpAmount = 0;
+        }
+
+        position.depositTokenBalance -= uint128(vars.depositAmountWithFees);
+
+        vars.removePosition = position.totalTopUpAmount == 0 || position.depositTokenBalance == 0;
+        _payFees(payer, beneficiary, vars.depositTotalFeesAmount, position.depositToken);
+        if (vars.removePosition) {
+            if (position.depositTokenBalance > 0) {
+                // transfer any unused locked tokens to the payer
+                IStakerVault(vault).transfer(payer, position.depositTokenBalance);
+                IStakerVault(vault).decreaseActionLockedBalance(
+                    payer,
+                    position.depositTokenBalance
+                );
+            }
+            _removePosition(payer, account, protocol);
+        }
+
+        emit TopUp(
+            account,
+            protocol,
+            payer,
+            position.depositToken,
+            vars.depositAmountWithFees,
+            position.actionToken,
+            vars.actionTokenAmount
+        );
+
+        // compute gas used and reimburse the keeper by using the
+        // funds of payer in the gas bank
+        // TODO: add constant gas consumed for transfer and tx prologue
+        vars.gasConsumed = vars.initialGas - gasleft();
+
+        vars.reimbursedWeiForGas = vars.userGasPrice * vars.gasConsumed;
+        if (vars.reimbursedWeiForGas > vars.gasBankBalance) {
+            vars.reimbursedWeiForGas = vars.gasBankBalance;
+        }
+
+        // ensure that the keeper is not overpaying
+        vars.requiredWeiForGas = tx.gasprice * vars.gasConsumed;
+        require(
+            vars.reimbursedWeiForGas + maxWeiForGas >= vars.requiredWeiForGas,
+            Error.GAS_TOO_HIGH
+        );
+        gasBank.withdrawFrom(payer, payable(msg.sender), vars.reimbursedWeiForGas);
+        if (vars.removePosition) {
+            gasBank.withdrawUnused(payer);
+        }
+
+        return true;
+    }","[189, 190, 191]"
+1428,"    function idToBond(uint256 _id) public view returns (Bond memory bond) {
+        bond = _idToBond[_id];
+        bond.owner = ownerOf(_id);
+        bond.expired = bond.expireEpoch <= epoch[bond.asset] ? true : false;
+        unchecked {
+            uint _accRewardsPerShare = accRewardsPerShare[bond.asset][bond.expired ? bond.expireEpoch-1 : epoch[bond.asset]];
+            bond.pending = bond.shares * _accRewardsPerShare / 1e18 - bondPaid[_id][bond.asset];
+        }
+    }","[1, 2, 3, 4, 5, 6, 7, 8]"
+3954,"    function sellAllAmount(
+        ERC20 pay_gem,
+        uint256 pay_amt,
+        ERC20 buy_gem,
+        uint256 min_fill_amount
+    ) external returns (uint256 fill_amt) {
+        require(!locked, ""Reentrancy attempt"");
+        uint256 offerId;
+        while (pay_amt > 0) {
+            //while there is amount to sell
+            offerId = getBestOffer(buy_gem, pay_gem); //Get the best offer for the token pair
+            require(offerId != 0); //Fails if there are not more offers
+
+            // There is a chance that pay_amt is smaller than 1 wei of the other token
+            if (
+                pay_amt * 1 ether <
+                wdiv(offers[offerId].buy_amt, offers[offerId].pay_amt)
+            ) {
+                break; //We consider that all amount is sold
+            }
+            if (pay_amt >= offers[offerId].buy_amt) {
+                //If amount to sell is higher or equal than current offer amount to buy
+                fill_amt = add(fill_amt, offers[offerId].pay_amt); //Add amount bought to acumulator
+                pay_amt = sub(pay_amt, offers[offerId].buy_amt); //Decrease amount to sell
+                take(bytes32(offerId), uint128(offers[offerId].pay_amt)); //We take the whole offer
+            } else {
+                // if lower
+                uint256 baux = rmul(
+                    pay_amt * 10**9,
+                    rdiv(offers[offerId].pay_amt, offers[offerId].buy_amt)
+                ) / 10**9;
+                fill_amt = add(fill_amt, baux); //Add amount bought to acumulator
+                take(bytes32(offerId), uint128(baux)); //We take the portion of the offer that we need
+                pay_amt = 0; //All amount is sold
+            }
+        }
+        require(fill_amt >= min_fill_amount);
+    }","[16, 29]"
+3613,"    function AddProposal(uint propId, string memory title, string memory desc, address[] memory targets, 
+                        uint[] memory values, string[] memory signatures, bytes[] memory calldatas) public {
+        Proposal memory newProp = Proposal(propId, title, desc, targets, values, signatures, calldatas);
+        proposals[propId] = newProp;
+    }",[1]
+3980,"    function initialize(uint256 _maxOrderSizeBPS, int128 _shapeCoefNum)
+        external
+    {
+        require(!initialized);
+        address _bathHouse = msg.sender; //Assume the initializer is BathHouse
+        require(
+            IBathHouse(_bathHouse).getMarket() !=
+                address(0x0000000000000000000000000000000000000000) &&
+                IBathHouse(_bathHouse).initialized(),
+            ""BathHouse not initialized""
+        );
+        bathHouse = _bathHouse;
+
+        RubiconMarketAddress = IBathHouse(_bathHouse).getMarket();
+
+        // Shape variables for dynamic inventory management
+        /// *** DEprecate but keep storage variable on OP
+        deprecatedStorageVarKept4Proxy = _maxOrderSizeBPS;
+
+        /// @dev A deprecated storage variable! Turns out order books are elegant and complex math is simply computed off-chain, and priced in on-chain orders at the speed of Ethereum L2s!
+        deprecatedStorageVarKept420Proxy = _shapeCoefNum;
+
+        initialized = true;
+    }",[14]
+2821,"    constructor(
+        bytes memory _configData,
+        bytes memory _immutables,
+        uint256 _maxLTV,
+        uint256 _liquidationFee,
+        uint256 _maturityDate,
+        uint256 _penaltyRate,
+        bool _isBorrowerWhitelistActive,
+        bool _isLenderWhitelistActive
+    ) {
+        // Handle Immutables Configuration
+        {
+            (
+                address _circuitBreaker,
+                address _comptrollerAddress,
+                address _timeLockAddress,
+                address _fraxlendWhitelistAddress
+            ) = abi.decode(_immutables, (address, address, address, address));
+
+            // Deployer contract
+            DEPLOYER_ADDRESS = msg.sender;
+            CIRCUIT_BREAKER_ADDRESS = _circuitBreaker;
+            COMPTROLLER_ADDRESS = _comptrollerAddress;
+            TIME_LOCK_ADDRESS = _timeLockAddress;
+            FRAXLEND_WHITELIST_ADDRESS = _fraxlendWhitelistAddress;
+        }
+
+        {
+            (
+                address _asset,
+                address _collateral,
+                address _oracleMultiply,
+                address _oracleDivide,
+                uint256 _oracleNormalization,
+                address _rateContract,
+
+            ) = abi.decode(_configData, (address, address, address, address, uint256, address, bytes));
+
+            // Pair Settings
+            assetContract = IERC20(_asset);
+            collateralContract = IERC20(_collateral);
+            currentRateInfo.feeToProtocolRate = DEFAULT_PROTOCOL_FEE;
+            cleanLiquidationFee = _liquidationFee;
+            dirtyLiquidationFee = (_liquidationFee * 9000) / LIQ_PRECISION; // 90% of clean fee
+
+            if (_maxLTV >= LTV_PRECISION && !_isBorrowerWhitelistActive) revert BorrowerWhitelistRequired();
+            maxLTV = _maxLTV;
+
+            // Swapper Settings
+            swappers[FRAXSWAP_ROUTER_ADDRESS] = true;
+
+            // Oracle Settings
+            {
+                IFraxlendWhitelist _fraxlendWhitelist = IFraxlendWhitelist(FRAXLEND_WHITELIST_ADDRESS);
+                // Check that oracles are on the whitelist
+                if (_oracleMultiply != address(0) && !_fraxlendWhitelist.oracleContractWhitelist(_oracleMultiply)) {
+                    revert NotOnWhitelist(_oracleMultiply);
+                }
+
+                if (_oracleDivide != address(0) && !_fraxlendWhitelist.oracleContractWhitelist(_oracleDivide)) {
+                    revert NotOnWhitelist(_oracleDivide);
+                }
+
+                // Write oracleData to storage
+                oracleMultiply = _oracleMultiply;
+                oracleDivide = _oracleDivide;
+                oracleNormalization = _oracleNormalization;
+
+                // Rate Settings
+                if (!_fraxlendWhitelist.rateContractWhitelist(_rateContract)) {
+                    revert NotOnWhitelist(_rateContract);
+                }
+            }
+
+            rateContract = IRateCalculator(_rateContract);
+        }
+
+        // Set approved borrowers whitelist
+        borrowerWhitelistActive = _isBorrowerWhitelistActive;
+
+        // Set approved lenders whitlist active
+        lenderWhitelistActive = _isLenderWhitelistActive;
+
+        // Set maturity date & penalty interest rate
+        maturityDate = _maturityDate;
+        penaltyRate = _penaltyRate;
+    }",[44]
+1787,"    function _init(LiquidStakingManager _liquidStakingNetworkManager, LPTokenFactory _lpTokenFactory) internal virtual {
+        require(address(_liquidStakingNetworkManager) != address(0), ""Zero Address"");
+        require(address(_lpTokenFactory) != address(0), ""Zero Address"");
+
+        liquidStakingNetworkManager = _liquidStakingNetworkManager;
+        lpTokenFactory = _lpTokenFactory;
+
+        baseLPTokenName = ""ETHLPToken_"";
+        baseLPTokenSymbol = ""ETHLP_"";
+        maxStakingAmountPerValidator = 4 ether;
+    }",[10]
+108,"  function getApprovalQuantityAt(address policyholder, uint8 role, uint256 timestamp) external view returns (uint128) {
+    if (role != approvalRole && !forceApprovalRole[role]) return 0;
+    uint128 quantity = policy.getPastQuantity(policyholder, role, timestamp);
+    return quantity > 0 && forceApprovalRole[role] ? type(uint128).max : quantity;
+  }",[4]
+4381,"    function deposit(uint256 _assetAmountIn, uint256 _minCitadelOut)
+        external
+        onlyWhenPriceNotFlagged
+        gacPausable
+        nonReentrant
+        returns (uint256 citadelAmount_)
+    {
+        require(_assetAmountIn > 0, ""_assetAmountIn must not be 0"");
+        require(
+            funding.assetCumulativeFunded + _assetAmountIn <= funding.assetCap,
+            ""asset funding cap exceeded""
+        );
+        funding.assetCumulativeFunded = funding.assetCumulativeFunded + _assetAmountIn;
+        // Take in asset from user
+        citadelAmount_ = getAmountOut(_assetAmountIn);
+        require(citadelAmount_ >= _minCitadelOut, ""minCitadelOut"");
+
+        asset.safeTransferFrom(msg.sender, saleRecipient, _assetAmountIn);
+        
+        // Deposit xCitadel and send to user
+        // TODO: Check gas costs. How does this relate to market buying if you do want to deposit to xCTDL?
+        xCitadel.depositFor(msg.sender, citadelAmount_);
+
+        emit Deposit(
+            msg.sender,
+            _assetAmountIn,
+            citadelAmount_
+        );
+    }","[15, 22]"
+1519,"    function setAuctionValidityTime(address user)
+        external
+        virtual
+        override
+        nonReentrant
+    {
+        DataTypes.PoolStorage storage ps = poolStorage();
+
+        require(user != address(0), Errors.ZERO_ADDRESS_NOT_VALID);
+        DataTypes.UserConfigurationMap storage userConfig = ps._usersConfig[
+            user
+        ];
+        (, , , , , , uint256 erc721HealthFactor) = PoolLogic
+            .executeGetUserAccountData(
+                user,
+                ps,
+                ADDRESSES_PROVIDER.getPriceOracle()
+            );
+        require(
+            erc721HealthFactor > ps._auctionRecoveryHealthFactor,
+            Errors.ERC721_HEALTH_FACTOR_NOT_ABOVE_THRESHOLD
+        );
+        userConfig.auctionValidityTime = block.timestamp;
+    }",[19]
+4189,"    function seizeAllowed(
+        address cTokenCollateral,
+        address cTokenBorrowed,
+        address liquidator,
+        address borrower,
+        uint seizeTokens) external returns (uint) {
+        // Pausing is a very serious situation - we revert to sound the alarms
+        require(!seizeGuardianPaused, ""seize is paused"");
+
+        // Shh - currently unused
+        seizeTokens;
+
+        if (!markets[cTokenCollateral].isListed || !markets[cTokenBorrowed].isListed) {
+            return uint(Error.MARKET_NOT_LISTED);
+        }
+
+        if (CToken(cTokenCollateral).comptroller() != CToken(cTokenBorrowed).comptroller()) {
+            return uint(Error.COMPTROLLER_MISMATCH);
+        }
+
+        // Keep the flywheel moving
+        // updateCompSupplyIndex(cTokenCollateral);
+        // distributeSupplierComp(cTokenCollateral, borrower);
+        // distributeSupplierComp(cTokenCollateral, liquidator);
+
+        return uint(Error.NO_ERROR);
+    }","[21, 22, 23, 24]"
+4848,"    function getFunds(string calldata schainName, address erc721OnMainnet, address receiver, uint tokenId)
+        external
+        override
+        onlySchainOwner(schainName)
+        whenKilled(keccak256(abi.encodePacked(schainName)))
+    {
+        bytes32 schainHash = keccak256(abi.encodePacked(schainName));
+        require(transferredAmount[erc721OnMainnet][tokenId] == schainHash, ""Incorrect tokenId"");
+        _removeTransferredAmount(erc721OnMainnet, tokenId);
+        IERC721Upgradeable(erc721OnMainnet).transferFrom(address(this), receiver, tokenId);
+    }","[1, 2, 3, 4, 5]"
+4180,"    function teamSummon(address recipient, uint256 count) external onlyOwner {
+        require(address(recipient) != address(0), 'address req');
+        for (uint256 i = 0; i < count; i++) {
+            _mint(recipient);
+        }
+    }",[1]
+1366,"    function _baseTokenReserves() internal view returns (uint256) {
+        return baseToken == address(0)
+            ? address(this).balance - msg.value // subtract the msg.value if the base token is ETH
+            : ERC20(baseToken).balanceOf(address(this));
+    }","[3, 4]"
+4803,"  function approve(address spender, uint256 amount) external returns (bool success) {
+    accountToInfo[msg.sender].allowance[spender] = amount;
+    emit Approval(msg.sender, spender, amount);
+    return true;
+  }",[1]
+3042,"    function _settleBalances(
+        Order calldata o,
+        uint256 amount,
+        address referrer,
+        Payment calldata p
+    ) internal {
+        uint256 protocolfee = ((o.totalAmt * 50) / 10000) * amount;
+        WETH.transferFrom(o.signer, address(this), o.totalAmt * amount);
+        WETH.withdraw(o.totalAmt * amount);
+        payEther(protocolfee, address(distributor));
+        payEther(o.exchange.paymentAmt * amount, o.exchange.paymentAddress);
+        payEther(o.prePayment.paymentAmt * amount, o.prePayment.paymentAddress);
+        if (o.refererrAmt > 0 && referrer != address(0)) {
+            payEther(o.refererrAmt * amount, referrer);
+            payEther(
+                (o.totalAmt - protocolfee - o.exchange.paymentAmt - o.prePayment.paymentAmt - o.refererrAmt) *
+                    amount -
+                    p.paymentAmt,
+                msg.sender
+            );
+        } else {
+            payEther(
+                (o.totalAmt - protocolfee - o.exchange.paymentAmt - o.prePayment.paymentAmt) * amount - p.paymentAmt,
+                msg.sender
+            );
+        }
+        payEther(p.paymentAmt, p.paymentAddress);
+        distributor.addFee([msg.sender, o.exchange.paymentAddress], protocolfee);
+    }","[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]"
+4295,"    function topUp(
+        bytes32 account,
+        address underlying,
+        uint256 amount,
+        bytes memory extra
+    ) external override returns (bool) {
+        bool repayDebt = abi.decode(extra, (bool));
+        if (underlying == address(0)) {
+            weth.deposit{value: amount}();
+            underlying = address(weth);
+        }
+
+        address addr = account.addr();
+
+        DataTypes.ReserveData memory reserve = lendingPool.getReserveData(underlying);
+        require(reserve.aTokenAddress != address(0), Error.UNDERLYING_NOT_SUPPORTED);
+
+        IERC20(underlying).safeApprove(address(lendingPool), amount);
+
+        if (repayDebt) {
+            uint256 stableDebt = IERC20(reserve.stableDebtTokenAddress).balanceOf(addr);
+            uint256 variableDebt = IERC20(reserve.variableDebtTokenAddress).balanceOf(addr);
+            if (variableDebt + stableDebt > 0) {
+                uint256 rateMode = stableDebt > variableDebt ? 1 : 2;
+                amount -= lendingPool.repay(underlying, amount, rateMode, addr);
+                if (amount == 0) return true;
+            }
+        }
+
+        lendingPool.deposit(underlying, amount, addr, BACKD_REFERRAL_CODE);
+        return true;
+    }",[18]
+3648,"  function _swapAssetOut(
+    bytes32 _canonicalId,
+    address _assetIn,
+    address _assetOut,
+    uint256 _amountOut,
+    uint256 _maxIn
+  )
+    internal
+    returns (
+      bool,
+      uint256,
+      address
+    )
+  {
+    AppStorage storage s = LibConnextStorage.connextStorage();
+
+    bool success;
+    uint256 amountIn;
+
+    // Swap the asset to the proper local asset
+    if (stableSwapPoolExist(_canonicalId)) {
+      // get internal swap pool
+      SwapUtils.Swap storage ipool = s.swapStorages[_canonicalId];
+      // if internal swap pool exists
+      uint8 tokenIndexIn = getTokenIndexFromStableSwapPool(_canonicalId, _assetIn);
+      uint8 tokenIndexOut = getTokenIndexFromStableSwapPool(_canonicalId, _assetOut);
+      // calculate slippage before performing swap
+      // NOTE: this is less efficient then relying on the `swapInternalOut` revert, but makes it easier
+      // to handle slippage failures (this can be called during reconcile, so must not fail)
+      if (_maxIn >= ipool.calculateSwapInv(tokenIndexIn, tokenIndexOut, _amountOut)) {
+        success = true;
+        amountIn = ipool.swapInternalOut(tokenIndexIn, tokenIndexOut, _amountOut, _maxIn);
+      }
+      // slippage is too high to perform swap: success = false, amountIn = 0
+    } else {
+      // Otherwise, swap via stable swap pool
+      IStableSwap pool = s.adoptedToLocalPools[_canonicalId];
+      uint256 _amountIn = pool.calculateSwapOutFromAddress(_assetIn, _assetOut, _amountOut);
+      if (_amountIn <= _maxIn) {
+        // set the success
+        success = true;
+
+        // perform the swap
+        SafeERC20.safeApprove(IERC20(_assetIn), address(pool), _amountIn);
+        amountIn = pool.swapExactOut(_amountOut, _assetIn, _assetOut, _maxIn);
+      }
+      // slippage is too high to perform swap: success = false, amountIn = 0
+    }
+
+    return (success, amountIn, _assetOut);
+  }",[44]
+2195,"    function updateVariableFeeParameters(FeeParameters memory _fp, uint256 _activeId) internal view {
+        uint256 _deltaT = block.timestamp - _fp.time;
+
+        if (_deltaT >= _fp.filterPeriod || _fp.time == 0) {
+            _fp.indexRef = uint24(_activeId);
+            if (_deltaT < _fp.decayPeriod) {
+                unchecked {
+                    // This can't overflow as `reductionFactor <= BASIS_POINT_MAX`
+                    _fp.volatilityReference = uint24(
+                        (uint256(_fp.reductionFactor) * _fp.volatilityAccumulated) / Constants.BASIS_POINT_MAX
+                    );
+                }
+            } else {
+                _fp.volatilityReference = 0;
+            }
+        }
+
+        _fp.time = (block.timestamp).safe40();
+
+        updateVolatilityAccumulated(_fp, _activeId);
+    }","[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]"
+126,"    function submitExchangeRateData(ExchangeRate calldata _exchangeRate)
+        external
+        override
+        trustedNodeOnly
+        checkMinTrustedNodes
+        checkERInspectionMode
+        whenNotPaused
+    {
+        if (isPORFeedBasedERData) {
+            revert InvalidERDataSource();
+        }
+        if (_exchangeRate.reportingBlockNumber >= block.number) {
+            revert ReportingFutureBlockData();
+        }
+        if (_exchangeRate.reportingBlockNumber % updateFrequencyMap[ETHX_ER_UF] > 0) {
+            revert InvalidReportingBlock();
+        }
+
+        // Get submission keys
+        bytes32 nodeSubmissionKey = keccak256(
+            abi.encode(
+                msg.sender,
+                _exchangeRate.reportingBlockNumber,
+                _exchangeRate.totalETHBalance,
+                _exchangeRate.totalETHXSupply
+            )
+        );
+        bytes32 submissionCountKey = keccak256(
+            abi.encode(_exchangeRate.reportingBlockNumber, _exchangeRate.totalETHBalance, _exchangeRate.totalETHXSupply)
+        );
+        uint8 submissionCount = attestSubmission(nodeSubmissionKey, submissionCountKey);
+        // Emit balances submitted event
+        emit ExchangeRateSubmitted(
+            msg.sender,
+            _exchangeRate.reportingBlockNumber,
+            _exchangeRate.totalETHBalance,
+            _exchangeRate.totalETHXSupply,
+            block.timestamp
+        );
+
+        if (
+            submissionCount == trustedNodesCount / 2 + 1 &&
+            _exchangeRate.reportingBlockNumber > exchangeRate.reportingBlockNumber
+        ) {
+            updateWithInLimitER(
+                _exchangeRate.totalETHBalance,
+                _exchangeRate.totalETHXSupply,
+                _exchangeRate.reportingBlockNumber
+            );
+        }
+    }",[42]
+3670,"  function _executePortalTransfer(
+    bytes32 _transferId,
+    uint256 _fastTransferAmount,
+    address _local,
+    address _router
+  ) internal returns (uint256, address) {
+    // Calculate local to adopted swap output if needed
+    (uint256 userAmount, address adopted) = AssetLogic.calculateSwapFromLocalAssetIfNeeded(_local, _fastTransferAmount);
+
+    IAavePool(s.aavePool).mintUnbacked(adopted, userAmount, address(this), AAVE_REFERRAL_CODE);
+
+    // Improvement: Instead of withdrawing to address(this), withdraw directly to the user or executor to save 1 transfer
+    IAavePool(s.aavePool).withdraw(adopted, userAmount, address(this));
+
+    // Store principle debt
+    s.portalDebt[_transferId] = userAmount;
+
+    // Store fee debt
+    s.portalFeeDebt[_transferId] = (s.aavePortalFeeNumerator * userAmount) / s.LIQUIDITY_FEE_DENOMINATOR;
+
+    emit AavePortalMintUnbacked(_transferId, _router, adopted, userAmount);
+
+    return (userAmount, adopted);
+  }","[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]"
+3324,"  function configureFor(
+    uint256 _projectId,
+    JBFundingCycleData calldata _data,
+    uint256 _metadata,
+    uint256 _mustStartAtOrAfter
+  ) external override onlyController(_projectId) returns (JBFundingCycle memory) {
+    // Duration must fit in a uint64.
+    if (_data.duration > type(uint64).max) revert INVALID_DURATION();
+
+    // Discount rate must be less than or equal to 100%.
+    if (_data.discountRate > JBConstants.MAX_DISCOUNT_RATE) revert INVALID_DISCOUNT_RATE();
+
+    // Weight must fit into a uint88.
+    if (_data.weight > type(uint88).max) revert INVALID_WEIGHT();
+
+    // Ballot should be a valid contract, supporting the correct interface
+    if(_data.ballot != IJBFundingCycleBallot(address(0))) {
+
+      address _ballot = address(_data.ballot);
+      uint32 _size;
+      assembly {
+        _size := extcodesize(_ballot) // No contract at the address ?
+      }
+      if (_size == 0) revert INVALID_BALLOT();
+
+      try _data.ballot.supportsInterface(type(IJBFundingCycleBallot).interfaceId) returns (bool _supports) {
+        if(!_supports) revert INVALID_BALLOT(); // Contract exists at the address but with the wrong interface
+      } catch {
+        revert INVALID_BALLOT(); // No ERC165 support
+      }
+    }
+
+    // The configuration timestamp is now.
+    uint256 _configuration = block.timestamp;
+
+    // Set up a reconfiguration by configuring intrinsic properties.
+    _configureIntrinsicPropertiesFor(
+      _projectId,
+      _configuration,
+      _data.weight,
+      // Must start on or after the current timestamp.
+      _mustStartAtOrAfter > block.timestamp ? _mustStartAtOrAfter : block.timestamp
+    );
+
+    // Efficiently stores a funding cycles provided user defined properties.
+    // If all user config properties are zero, no need to store anything as the default value will have the same outcome.
+    if (
+      _data.ballot != IJBFundingCycleBallot(address(0)) ||
+      _data.duration > 0 ||
+      _data.discountRate > 0
+    ) {
+      // ballot in bits 0-159 bytes.
+      uint256 packed = uint160(address(_data.ballot));
+
+      // duration in bits 160-223 bytes.
+      packed |= _data.duration << 160;
+
+      // discountRate in bits 224-255 bytes.
+      packed |= _data.discountRate << 224;
+
+      // Set in storage.
+      _packedUserPropertiesOf[_projectId][_configuration] = packed;
+    }
+
+    // Set the metadata if needed.
+    if (_metadata > 0) _metadataOf[_projectId][_configuration] = _metadata;
+
+    emit Configure(_configuration, _projectId, _data, _metadata, _mustStartAtOrAfter, msg.sender);
+
+    // Return the funding cycle for the new configuration.
+    return _getStructFor(_projectId, _configuration);
+  }","[8, 9, 10, 11, 12, 13, 14]"
+1420,"    function _closePosition(
+        uint _id,
+        uint _percent,
+        uint _price,
+        address _stableVault,
+        address _outputToken,
+        bool _isBot
+    )
+        internal
+    {
+        (IPosition.Trade memory _trade, uint256 _positionSize, int256 _payout) = tradingExtension._closePosition(_id, _price, _percent);
+        position.setAccInterest(_id);
+        _updateFunding(_trade.asset, _trade.tigAsset);
+        if (_percent < DIVISION_CONSTANT) {
+            if ((_trade.margin*_trade.leverage*(DIVISION_CONSTANT-_percent)/DIVISION_CONSTANT)/1e18 < tradingExtension.minPos(_trade.tigAsset)) revert(""!size"");
+            position.reducePosition(_id, _percent);
+        } else {
+            position.burn(_id);
+        }
+        uint256 _toMint;
+        if (_payout > 0) {
+            unchecked {
+                _toMint = _handleCloseFees(_trade.asset, uint256(_payout)*_percent/DIVISION_CONSTANT, _trade.tigAsset, _positionSize*_percent/DIVISION_CONSTANT, _trade.trader, _isBot);
+                if (maxWinPercent > 0 && _toMint > _trade.margin*maxWinPercent/DIVISION_CONSTANT) {
+                    _toMint = _trade.margin*maxWinPercent/DIVISION_CONSTANT;
+                }
+            }
+            _handleWithdraw(_trade, _stableVault, _outputToken, _toMint);
+        }
+        emit PositionClosed(_id, _price, _percent, _toMint, _trade.trader, _isBot ? _msgSender() : _trade.trader);
+    }","[24, 25, 26]"
+3210,"    function start(address _vault) external payable {
+        // Reverts if ether deposit amount is zero
+        if (msg.value == 0) revert ZeroDeposit();
+        // Reverts if address is not a registered vault
+        (address token, uint256 id) = IVaultRegistry(registry).vaultToToken(
+            _vault
+        );
+        if (id == 0) revert NotVault(_vault);
+        // Reverts if auction state is not inactive
+        (, , State current, , , ) = this.buyoutInfo(_vault);
+        State required = State.INACTIVE;
+        if (current != required) revert InvalidState(required, current);
+
+        // Gets total supply of fractional tokens for the vault
+        uint256 totalSupply = IVaultRegistry(registry).totalSupply(_vault);
+        // Gets total balance of fractional tokens owned by caller
+        uint256 depositAmount = IERC1155(token).balanceOf(msg.sender, id);
+
+        // Transfers fractional tokens into the buyout pool
+        IERC1155(token).safeTransferFrom(
+            msg.sender,
+            address(this),
+            id,
+            depositAmount,
+            """"
+        );
+
+        // Calculates price of buyout and fractions
+        // @dev Reverts with division error if called with total supply of tokens
+        uint256 buyoutPrice = (msg.value * 100) /
+            (100 - ((depositAmount * 100) / totalSupply));
+        uint256 fractionPrice = buyoutPrice / totalSupply;
+
+        // Sets info mapping of the vault address to auction struct
+        buyoutInfo[_vault] = Auction(
+            block.timestamp,
+            msg.sender,
+            State.LIVE,
+            fractionPrice,
+            msg.value,
+            totalSupply
+        );
+        // Emits event for starting auction
+        emit Start(
+            _vault,
+            msg.sender,
+            block.timestamp,
+            buyoutPrice,
+            fractionPrice
+        );
+    }",[32]
